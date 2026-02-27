@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     retry_backoff_multiplier: float = 1.0
     retry_backoff_max: float = 30.0
 
+    # ── Scraper Standalone ──
+    scraper_url: str = "http://localhost:8090"
+    scraper_api_key: str = ""
+
     # ── Cooldowns ──
     ingest_cooldown_minutes: int = 5
 

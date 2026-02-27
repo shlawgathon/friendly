@@ -7,7 +7,7 @@ import logging
 import uuid
 
 from app.config import settings
-from app.services import scraper, reka, pioneer, yutori, graph, modulate
+from app.services import scraper, reka, pioneer, yutori, graph, modulate  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

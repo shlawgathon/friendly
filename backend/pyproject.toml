@@ -15,7 +15,6 @@ dependencies = [
     "python-multipart>=0.0.9",
     "tenacity>=9.0.0",
     "python-dotenv>=1.0.1",
-    "instaloader>=4.13.0",
 ]
 
 [build-system]

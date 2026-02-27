@@ -24,7 +24,7 @@ Skip the awkward conversations and get straight into deep conversations about sh
 
 - **FastAPI** (Python)
 - **Neo4j** graph database
-- **Instaloader** Instagram scraping
+- **[Atlas Pipeline](scraper-guide-new.md)** scraper-standalone (Instagram HTTP scraping)
 - **UV** package manager
 
 ### AI Services
@@ -85,6 +85,10 @@ REKA_API_KEY=your_key
 YUTORI_API_KEY=your_key
 MODULATE_API_KEY=your_key
 PIONEER_API_KEY=your_key
+
+# Scraper Standalone
+SCRAPER_URL=http://localhost:8090
+SCRAPER_API_KEY=your_key
 ```
 
 ## Architecture
@@ -102,7 +106,7 @@ PIONEER_API_KEY=your_key
 
 ### Ingestion Pipeline
 
-1. **Scrape** — Instaloader fetches profile, posts, and carousel images
+1. **Scrape** — scraper-standalone fetches profile, posts, and reels via Instagram's internal APIs
 2. **Analyze** — Reka vision analyzes each image with post caption context
 3. **Extract** — Reka extracts structured interests (hobbies, brands) from combined text
 4. **Store** — Entities written to Neo4j as `User → INTERESTED_IN → Hobby` / `User → FOLLOWS → Brand`
