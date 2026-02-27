@@ -68,7 +68,7 @@ async def add_brand(user_id: str, brand_name: str, source: str = "visual") -> No
             """
             MERGE (u:User {id: $uid})
             MERGE (b:Brand {name: $brand})
-            MERGE (u)-[r:FOLLOWS]->(b)
+            MERGE (u)-[r:KNOWS]->(b)
             SET r.source = $source, r.updated_at = datetime()
             """,
             uid=user_id, brand=brand_name.lower().strip(), source=source,
@@ -145,20 +145,15 @@ async def find_matches(user_id: str, limit: int = 10) -> list[dict]:
 async def get_graph_data(user_id: str) -> dict:
     """Get full graph data for force-directed visualization."""
     async with get_session() as session:
-        # Nodes: user + their interests + brands + matched users
+        # Nodes: user + their interests + brands
         result = await session.run(
             """
             MATCH (me:User {id: $uid})
             OPTIONAL MATCH (me)-[r:INTERESTED_IN]->(h:Hobby)
-            OPTIONAL MATCH (me)-[rf:FOLLOWS]->(b:Brand)
-            OPTIONAL MATCH (h)<-[r2:INTERESTED_IN]-(other:User)
-            WHERE other.id <> $uid
-            WITH me,
-                 collect(DISTINCT {id: h.name, label: h.name, type: 'hobby', weight: r.weight}) AS hobbies,
-                 collect(DISTINCT {id: b.name, label: b.name, type: 'brand'}) AS brands,
-                 collect(DISTINCT {id: other.id, label: other.username, type: 'user', pic: other.profile_pic_url}) AS others
+            OPTIONAL MATCH (me)-[rf:KNOWS]->(b:Brand)
             RETURN {id: me.id, label: me.username, type: 'self', pic: me.profile_pic_url} AS self_node,
-                   hobbies, brands, others
+                   collect(DISTINCT {id: h.name, label: h.name, type: 'hobby', weight: r.weight}) AS hobbies,
+                   collect(DISTINCT {id: b.name, label: b.name, type: 'brand'}) AS brands
             """,
             uid=user_id,
         )
@@ -177,34 +172,45 @@ async def get_graph_data(user_id: str) -> dict:
         for b in record["brands"]:
             if b["id"]:
                 nodes.append(b)
-                edges.append({"source": user_id, "target": b["id"], "type": "FOLLOWS", "weight": 0.4})
+                edges.append({"source": user_id, "target": b["id"], "type": "KNOWS", "weight": 0.4})
 
-        for o in record["others"]:
-            if o["id"]:
-                nodes.append(o)
-
-        # Deduplicate
-        seen = set()
-        unique_nodes = []
-        for n in nodes:
-            if n["id"] not in seen:
-                seen.add(n["id"])
-                unique_nodes.append(n)
-
-        # Edges between other users and hobbies
+        # Find other users who share hobbies
         result2 = await session.run(
             """
             MATCH (me:User {id: $uid})-[:INTERESTED_IN]->(h:Hobby)<-[r:INTERESTED_IN]-(other:User)
             WHERE other.id <> $uid
-            RETURN other.id AS user_id, h.name AS hobby, r.weight AS weight
+            RETURN DISTINCT other.id AS uid, other.username AS username, other.profile_pic_url AS pic,
+                   collect(DISTINCT {hobby: h.name, weight: r.weight}) AS shared
             """,
             uid=user_id,
         )
         async for rec in result2:
-            edges.append({
-                "source": rec["user_id"], "target": rec["hobby"],
-                "type": "INTERESTED_IN", "weight": rec.get("weight", 0.5),
-            })
+            nodes.append({"id": rec["uid"], "label": rec["username"], "type": "user", "pic": rec["pic"]})
+            for s in rec["shared"]:
+                edges.append({"source": rec["uid"], "target": s["hobby"], "type": "INTERESTED_IN", "weight": s.get("weight", 0.5)})
+
+        # Find other users who share brands
+        result3 = await session.run(
+            """
+            MATCH (me:User {id: $uid})-[:KNOWS]->(b:Brand)<-[r:KNOWS]-(other:User)
+            WHERE other.id <> $uid
+            RETURN DISTINCT other.id AS uid, other.username AS username, other.profile_pic_url AS pic,
+                   collect(DISTINCT b.name) AS shared_brands
+            """,
+            uid=user_id,
+        )
+        async for rec in result3:
+            nodes.append({"id": rec["uid"], "label": rec["username"], "type": "user", "pic": rec["pic"]})
+            for brand in rec["shared_brands"]:
+                edges.append({"source": rec["uid"], "target": brand, "type": "KNOWS", "weight": 0.4})
+
+        # Deduplicate nodes
+        seen = set()
+        unique_nodes = []
+        for n in nodes:
+            if n["id"] and n["id"] not in seen:
+                seen.add(n["id"])
+                unique_nodes.append(n)
 
         return {"nodes": unique_nodes, "edges": edges}
 

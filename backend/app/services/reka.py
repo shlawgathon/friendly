@@ -49,7 +49,8 @@ async def analyze_image(image_url: str, caption: str = "") -> str:
                                     "text": (
                                         f"What hobby or activity is the person in this photo DOING?{context} "
                                         "Only describe what you are CERTAIN about. "
-                                        "Name the specific activity and any brands/logos visible. "
+                                        "ONLY name a brand if you can clearly READ the brand name/logo TEXT in the image. "
+                                        "Do NOT guess brands from the shape or style of objects. "
                                         "Be concise: 1-2 sentences max. If unclear, say 'unclear'."
                                     ),
                                 },
@@ -106,13 +107,14 @@ async def extract_interests(text: str) -> dict:
         "STRICT RULES:\n"
         "- Extract high-level hobbies only (e.g. 'motorcycle' NOT 'riding', 'inspection', 'maintenance')\n"
         "- ONE word per interest when possible (e.g. 'motorcycle' not 'motorcycle riding')\n"
-        "- Brand names as-is (e.g. 'yamaha', 'nike')\n"
+        "- ONLY include brands that are EXPLICITLY mentioned by name in the text — do NOT guess brands\n"
+        "- If the text says 'Yamaha R7' include 'yamaha'. If it just says 'sport motorcycle' do NOT guess a brand\n"
         "- NO generic verbs/actions (riding, sitting, wearing, inspecting = SKIP)\n"
         "- NO generic activities (customization, modification, tuning, maintenance = SKIP)\n"
         "- NO visual descriptions (carbon fiber, chrome, leather = SKIP)\n"
         "- NO duplicates — if 3 photos show motorcycles, output 'motorcycle' ONCE\n"
-        "- Max 5 interests total — only the most prominent ones\n\n"
-        "Categories: hobby, sport, brand, location\n\n"
+        "- Max 3 interests total — only the MOST prominent ones\n\n"
+        "Categories: hobby, brand\n\n"
         f"Content:\n{text[:3000]}\n\n"
         "Return ONLY a JSON object, no markdown:"
     )

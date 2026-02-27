@@ -22,6 +22,7 @@ interface UserContextType {
   logout: () => void;
   addAccount: (account: SyncedAccount) => void;
   updateAccountStatus: (username: string, status: SyncedAccount["status"]) => void;
+  removeAccount: (username: string) => void;
 }
 
 const UserContext = createContext<UserContextType | null>(null);
@@ -87,8 +88,18 @@ export function UserProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const removeAccount = (username: string) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        accounts: prev.accounts.filter((a) => a.username !== username),
+      };
+    });
+  };
+
   return (
-    <UserContext.Provider value={{ user, login, logout, addAccount, updateAccountStatus }}>
+    <UserContext.Provider value={{ user, login, logout, addAccount, updateAccountStatus, removeAccount }}>
       {children}
     </UserContext.Provider>
   );

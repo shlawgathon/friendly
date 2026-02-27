@@ -9,7 +9,7 @@ import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus 
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
   label: string;
-  type: "self" | "user" | "hobby";
+  type: "self" | "user" | "hobby" | "brand";
   pic?: string;
   weight?: number;
 }
@@ -21,7 +21,7 @@ interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
 
 function DashboardContent() {
   const router = useRouter();
-  const { user, logout, addAccount, updateAccountStatus } = useUser();
+  const { user, logout, addAccount, updateAccountStatus, removeAccount } = useUser();
   const svgRef = useRef<SVGSVGElement>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [icebreaker, setIcebreaker] = useState("");
@@ -62,8 +62,15 @@ function DashboardContent() {
 
   // ── Add Another Account ──
   const handleAddAccount = async () => {
-    const trimmed = newUsername.trim().replace(/^@/, "");
+    const trimmed = newUsername.trim().replace(/^@/, "").toLowerCase();
     if (!trimmed) return;
+
+    // Duplicate check
+    if (user?.accounts.some((a) => a.username === trimmed)) {
+      setAddError(`@${trimmed} is already synced`);
+      return;
+    }
+
     setAddError("");
     setAddingAccount(true);
 
@@ -138,6 +145,7 @@ function DashboardContent() {
         case "self": return "#7c3aed";
         case "user": return "#06b6d4";
         case "hobby": return "#f59e0b";
+        case "brand": return "#f59e0b";
         default: return "#6b7280";
       }
     };
@@ -147,6 +155,7 @@ function DashboardContent() {
         case "self": return 28;
         case "user": return 18;
         case "hobby": return 12;
+        case "brand": return 14;
         default: return 10;
       }
     };
@@ -297,7 +306,7 @@ function DashboardContent() {
                   <p className="text-sm text-gray-500">No accounts synced yet</p>
                 )}
                 {user.accounts.map((acc) => (
-                  <div key={acc.username} className="glass p-3 flex items-center justify-between">
+                  <div key={acc.username} className="glass p-3 flex items-center justify-between group">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="white">
@@ -311,13 +320,22 @@ function DashboardContent() {
                         </p>
                       </div>
                     </div>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      acc.status === "completed" ? "bg-emerald-500/20 text-emerald-400" :
-                      acc.status === "syncing" ? "bg-amber-500/20 text-amber-400" :
-                      "bg-red-500/20 text-red-400"
-                    }`}>
-                      {acc.status === "syncing" ? "Syncing..." : acc.status === "completed" ? "Synced" : "Failed"}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        acc.status === "completed" ? "bg-emerald-500/20 text-emerald-400" :
+                        acc.status === "syncing" ? "bg-amber-500/20 text-amber-400" :
+                        "bg-red-500/20 text-red-400"
+                      }`}>
+                        {acc.status === "syncing" ? "Syncing..." : acc.status === "completed" ? "Synced" : "Failed"}
+                      </span>
+                      <button
+                        onClick={() => removeAccount(acc.username)}
+                        className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all text-sm"
+                        title="Remove account"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
