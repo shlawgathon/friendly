@@ -1,0 +1,25 @@
+[project]
+name = "friendly-backend"
+version = "0.1.0"
+description = "Friendly — semantic social graph backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "httpx>=0.27.0",
+    "neo4j>=5.25.0",
+    "reka-api>=2.0.0",
+    "gliner2>=0.1.0",
+    "python-multipart>=0.0.9",
+    "tenacity>=9.0.0",
+    "python-dotenv>=1.0.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
