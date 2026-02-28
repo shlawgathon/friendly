@@ -64,3 +64,9 @@ export async function getEnrichmentStatus(jobId: string) {
   if (!res.ok) throw new Error("Enrichment status failed");
   return res.json();
 }
+
+export async function getSession(userId: string) {
+  const res = await fetch(`${API_BASE}/api/discover/session?user_id=${userId}`);
+  if (!res.ok) throw new Error("Session restore failed");
+  return res.json();
+}

@@ -641,7 +641,7 @@ function DashboardContent() {
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">🎫 Nearby Events</h3>
                   <div className="space-y-2">
-                    {enrichment.tier2.events
+                    {enrichment!.tier2.events
                       .filter((evt: any) => evt.title?.toLowerCase().includes(selectedNode.label.toLowerCase()) || true)
                       .slice(0, 5)
                       .map((evt: any, i: number) => (
@@ -664,7 +664,7 @@ function DashboardContent() {
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">💬 Communities</h3>
                   <div className="space-y-2">
-                    {enrichment.tier2.communities.slice(0, 4).map((comm: any, i: number) => (
+                    {enrichment!.tier2.communities.slice(0, 4).map((comm: any, i: number) => (
                       <a key={i} href={comm.url} target="_blank" rel="noopener noreferrer"
                         className="glass p-3 block hover:border-violet-500/30 transition-colors group">
                         <div className="flex items-center justify-between">
@@ -685,7 +685,7 @@ function DashboardContent() {
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">🤝 Meetups</h3>
                   <div className="space-y-2">
-                    {enrichment.tier2.meetups.slice(0, 4).map((mt: any, i: number) => (
+                    {enrichment!.tier2.meetups.slice(0, 4).map((mt: any, i: number) => (
                       <a key={i} href={mt.url} target="_blank" rel="noopener noreferrer"
                         className="glass p-3 block hover:border-emerald-500/30 transition-colors group">
                         <p className="text-sm font-medium group-hover:text-emerald-400 transition-colors">{mt.name}</p>

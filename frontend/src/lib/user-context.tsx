@@ -18,7 +18,7 @@ export interface UserSession {
 
 interface UserContextType {
   user: UserSession | null;
-  login: (username: string) => UserSession;
+  login: (username: string) => Promise<UserSession>;
   logout: () => void;
   addAccount: (account: SyncedAccount) => void;
   updateAccountStatus: (username: string, status: SyncedAccount["status"]) => void;
@@ -49,7 +49,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
-  const login = (username: string): UserSession => {
+  const login = async (username: string): Promise<UserSession> => {
     const session: UserSession = {
       userId: `ig:${username}`,
       displayName: username,
@@ -57,6 +57,19 @@ export function UserProvider({ children }: { children: ReactNode }) {
       createdAt: new Date().toISOString(),
     };
     setUser(session);
+
+    // Restore synced accounts from Neo4j (fire-and-forget, non-blocking)
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${API_BASE}/api/discover/session?user_id=ig:${username}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.exists && data.accounts?.length > 0) {
+          setUser((prev) => prev ? { ...prev, accounts: data.accounts } : prev);
+        }
+      }
+    } catch {}
+
     return session;
   };
 

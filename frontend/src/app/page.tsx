@@ -31,7 +31,7 @@ export default function Home() {
     setError("");
     try {
       const trimmed = username.trim().replace(/^@/, "");
-      const session = user || login(trimmed);
+      const session = user || await login(trimmed);
       const res = await ingestInstagram(trimmed);
       setCurrentJobId(res.job_id);
 
@@ -99,9 +99,9 @@ export default function Home() {
       try {
         const job = await getJobStatus(currentJobId);
         setProgress(job.progress?.step || job.status);
-        if (job.status === "completed" || job.status === "failed") {
+        if (job.status === "completed" || job.status === "failed" || job.status === "tier1_done" || job.status === "enriching") {
           clearInterval(poll);
-          updateAccountStatus(username.trim().replace(/^@/, ""), job.status === "completed" ? "completed" : "failed");
+          updateAccountStatus(username.trim().replace(/^@/, ""), job.status === "failed" ? "failed" : "completed");
           router.push(`/dashboard`);
         }
       } catch {
