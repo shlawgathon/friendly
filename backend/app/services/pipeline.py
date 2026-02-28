@@ -79,17 +79,9 @@ async def run_instagram_ingest(job_id: str, username: str, user_id: str,
         # ── Step 3: Extract interests from all text ──
         combined_text = "\n\n".join(captions)
 
-        # Primary: use Reka to extract structured interests
-        extraction = await reka.extract_interests(combined_text)
+        # Extract entities using Pioneer GLiNER2 NER
+        extraction = await pioneer.extract_entities(combined_text)
         entities = extraction.get("entities", {})
-
-        # Fallback: try Pioneer if Reka returned nothing
-        if not entities:
-            try:
-                extraction = await pioneer.extract_entities(combined_text)
-                entities = extraction.get("entities", {})
-            except Exception as e:
-                logger.warning("Pioneer fallback also failed: %s", e)
 
         # Write entities to graph
         entity_count = await graph.add_entities_from_extraction(user_id, entities, source="visual")

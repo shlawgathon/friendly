@@ -93,24 +93,32 @@ SCRAPER_API_KEY=your_key
 
 ## Architecture
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Frontend   │────▶│   Backend   │────▶│   Neo4j     │
-│  Next.js     │     │   FastAPI   │     │   Graph DB  │
-└─────────────┘     └──────┬──────┘     └─────────────┘
-                           │
-                    ┌──────┼──────┐
-                    ▼      ▼      ▼
-                  Reka  Yutori  Modulate
+```mermaid
+graph LR
+    Frontend["Frontend<br/>Next.js"] --> Backend["Backend<br/>FastAPI"]
+    Backend --> Neo4j["Neo4j<br/>Graph DB"]
+    Backend --> Scraper["scraper-standalone<br/>:8090"]
+    Backend --> Reka
+    Backend --> Pioneer["Pioneer<br/>GLiNER2"]
+    Backend --> Yutori
+    Backend --> Modulate
 ```
 
 ### Ingestion Pipeline
 
-1. **Scrape** — scraper-standalone fetches profile, posts, and reels via Instagram's internal APIs
-2. **Analyze** — Reka vision analyzes each image with post caption context
-3. **Extract** — Reka extracts structured interests (hobbies, brands) from combined text
-4. **Store** — Entities written to Neo4j as `User → INTERESTED_IN → Hobby` / `User → FOLLOWS → Brand`
-5. **Enrich** — Yutori submits research & scouting tasks for top interests
+```mermaid
+flowchart TD
+    A["POST /api/ingest/instagram"] --> B["Scrape via scraper-standalone"]
+    B --> C["Profile + Posts + Reels"]
+    C --> D["Reka Vision — analyze images"]
+    C --> E["Collect captions + bio text"]
+    D --> F["Combined text corpus"]
+    E --> F
+    F --> G["Pioneer GLiNER2 — extract entities"]
+    G --> I["Write entities to Neo4j"]
+    I --> J["Yutori — research & scouting tasks"]
+    J --> K["Job complete ✓"]
+```
 
 ## License
 
