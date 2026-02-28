@@ -19,6 +19,11 @@ SCHEMA_QUERIES = [
     "CREATE INDEX user_username IF NOT EXISTS FOR (u:User) ON (u.username)",
     "CREATE INDEX ingest_job_status IF NOT EXISTS FOR (j:IngestJob) ON (j.status)",
     "CREATE INDEX task_record_status IF NOT EXISTS FOR (t:TaskRecord) ON (t.status)",
+    # Enrichment indexes
+    "CREATE INDEX event_url IF NOT EXISTS FOR (e:Event) ON (e.url)",
+    "CREATE INDEX community_url IF NOT EXISTS FOR (c:Community) ON (c.url)",
+    "CREATE INDEX meetup_url IF NOT EXISTS FOR (m:Meetup) ON (m.url)",
+    "CREATE INDEX vibe_user IF NOT EXISTS FOR (v:Vibe) ON (v.user_id)",
 ]
 
 
