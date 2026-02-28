@@ -43,8 +43,14 @@ function DashboardContent() {
   const loadGraph = useCallback(async () => {
     if (!userId) return;
     try {
+      // Include all synced accounts so their interests show in the graph
+      const extraIds = (user?.accounts || [])
+        .filter((a) => a.status === "completed")
+        .map((a) => `ig:${a.username}`)
+        .filter((id) => id !== userId);
+
       const [graphData, matchData] = await Promise.all([
-        getGraphData(userId),
+        getGraphData(userId, extraIds),
         getMatches(userId),
       ]);
       setMatches(matchData.matches || []);
@@ -140,8 +146,31 @@ function DashboardContent() {
         .on("zoom", (e) => g.attr("transform", e.transform)) as any
     );
 
-    const typeColor = (type: string) => {
-      switch (type) {
+    // Detect shared nodes: interests/brands connected to 2+ different users
+    const userTypes = new Set(["self", "user"]);
+    const nodeConnections = new Map<string, Set<string>>(); // nodeId → set of user IDs
+    for (const edge of data.edges) {
+      const src = typeof edge.source === "string" ? edge.source : (edge.source as any).id;
+      const tgt = typeof edge.target === "string" ? edge.target : (edge.target as any).id;
+      const srcNode = data.nodes.find((n) => n.id === src);
+      const tgtNode = data.nodes.find((n) => n.id === tgt);
+      if (srcNode && userTypes.has(srcNode.type)) {
+        if (!nodeConnections.has(tgt)) nodeConnections.set(tgt, new Set());
+        nodeConnections.get(tgt)!.add(src);
+      }
+      if (tgtNode && userTypes.has(tgtNode.type)) {
+        if (!nodeConnections.has(src)) nodeConnections.set(src, new Set());
+        nodeConnections.get(src)!.add(tgt);
+      }
+    }
+    const sharedNodeIds = new Set<string>();
+    for (const [nodeId, users] of nodeConnections) {
+      if (users.size >= 2) sharedNodeIds.add(nodeId);
+    }
+
+    const typeColor = (d: GraphNode) => {
+      if ((d.type === "hobby" || d.type === "brand") && sharedNodeIds.has(d.id)) return "#22c55e";
+      switch (d.type) {
         case "self": return "#7c3aed";
         case "user": return "#06b6d4";
         case "hobby": return "#f59e0b";
@@ -160,6 +189,13 @@ function DashboardContent() {
       }
     };
 
+    // Check if an edge touches a shared node
+    const isSharedEdge = (edge: any) => {
+      const tgtId = typeof edge.target === "string" ? edge.target : edge.target.id;
+      const srcId = typeof edge.source === "string" ? edge.source : edge.source.id;
+      return sharedNodeIds.has(tgtId) || sharedNodeIds.has(srcId);
+    };
+
     const simulation = d3.forceSimulation<GraphNode>(data.nodes)
       .force("link", d3.forceLink<GraphNode, GraphEdge>(data.edges)
         .id((d) => d.id).distance(120).strength((d) => (d.weight || 0.5) * 0.3))
@@ -168,8 +204,8 @@ function DashboardContent() {
       .force("collision", d3.forceCollide().radius((d: any) => nodeSize(d.type) + 10));
 
     const link = g.append("g").selectAll("line").data(data.edges).join("line")
-      .attr("stroke", "rgba(124, 58, 237, 0.2)")
-      .attr("stroke-width", (d) => Math.max(1, (d.weight || 0.5) * 3));
+      .attr("stroke", (d: any) => isSharedEdge(d) ? "rgba(255, 255, 255, 0.35)" : "rgba(124, 58, 237, 0.2)")
+      .attr("stroke-width", (d: any) => isSharedEdge(d) ? Math.max(2, (d.weight || 0.5) * 4) : Math.max(1, (d.weight || 0.5) * 3));
 
     const node = g.append("g").selectAll("g").data(data.nodes).join("g")
       .style("cursor", "pointer")
@@ -189,32 +225,32 @@ function DashboardContent() {
 
     node.append("circle")
       .attr("r", (d) => nodeSize(d.type))
-      .attr("fill", (d) => typeColor(d.type))
-      .attr("filter", (d) => d.type === "self" ? "url(#glow)" : "none")
+      .attr("fill", (d) => typeColor(d))
+      .attr("filter", (d) => d.type === "self" || sharedNodeIds.has(d.id) ? "url(#glow)" : "none")
       .attr("opacity", 0.9);
 
     node.append("text")
       .text((d) => d.label)
       .attr("dy", (d) => nodeSize(d.type) + 16)
       .attr("text-anchor", "middle")
-      .attr("fill", "#9ca3af")
+      .attr("fill", (d) => sharedNodeIds.has(d.id) ? "#86efac" : "#9ca3af")
       .attr("font-size", (d) => d.type === "hobby" ? "10px" : "12px")
-      .attr("font-weight", (d) => d.type === "self" ? "600" : "400");
+      .attr("font-weight", (d) => d.type === "self" || sharedNodeIds.has(d.id) ? "600" : "400");
 
     node.on("mouseover", function (_, d) {
       d3.select(this).select("circle").transition().duration(200)
         .attr("r", nodeSize(d.type) * 1.3).attr("filter", "url(#glow)");
       link.attr("stroke", (l: any) =>
-        l.source.id === d.id || l.target.id === d.id ? "rgba(124, 58, 237, 0.6)" : "rgba(124, 58, 237, 0.1)"
+        l.source.id === d.id || l.target.id === d.id ? "rgba(255, 255, 255, 0.7)" : isSharedEdge(l) ? "rgba(255, 255, 255, 0.15)" : "rgba(124, 58, 237, 0.1)"
       ).attr("stroke-width", (l: any) =>
         l.source.id === d.id || l.target.id === d.id ? 3 : 1
       );
     }).on("mouseout", function (_, d) {
       d3.select(this).select("circle").transition().duration(200)
         .attr("r", nodeSize(d.type))
-        .attr("filter", d.type === "self" ? "url(#glow)" : "none");
-      link.attr("stroke", "rgba(124, 58, 237, 0.2)")
-        .attr("stroke-width", (l: any) => Math.max(1, ((l as GraphEdge).weight || 0.5) * 3));
+        .attr("filter", d.type === "self" || sharedNodeIds.has(d.id) ? "url(#glow)" : "none");
+      link.attr("stroke", (l: any) => isSharedEdge(l) ? "rgba(255, 255, 255, 0.35)" : "rgba(124, 58, 237, 0.2)")
+        .attr("stroke-width", (l: any) => isSharedEdge(l) ? Math.max(2, ((l as GraphEdge).weight || 0.5) * 4) : Math.max(1, ((l as GraphEdge).weight || 0.5) * 3));
     });
 
     simulation.on("tick", () => {
@@ -251,6 +287,7 @@ function DashboardContent() {
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-violet-600" /> You</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-cyan-500" /> People</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Interests</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-green-500" /> Shared</span>
             </div>
 
             {/* Account button */}

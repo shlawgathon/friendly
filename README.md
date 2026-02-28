@@ -29,11 +29,12 @@ Skip the awkward conversations and get straight into deep conversations about sh
 
 ### AI Services
 
-| Service      | Role                                                       |
-| ------------ | ---------------------------------------------------------- |
-| **Reka**     | Image analysis, interest extraction, icebreaker generation |
-| **Yutori**   | Research & scouting tasks for interest enrichment          |
-| **Modulate** | Speech-to-text for voice ingestion                         |
+| Service      | Role                                              |
+| ------------ | ------------------------------------------------- |
+| **Reka**     | Image analysis, icebreaker generation             |
+| **Pioneer**  | GLiNER2 zero-shot NER — entity extraction         |
+| **Yutori**   | Research & scouting tasks for interest enrichment |
+| **Modulate** | Speech-to-text for voice ingestion                |
 
 ## Getting Started
 
@@ -82,14 +83,35 @@ NEO4J_PASSWORD=your_password
 
 # AI Services
 REKA_API_KEY=your_key
+PIONEER_API_KEY=your_key
 YUTORI_API_KEY=your_key
 MODULATE_API_KEY=your_key
-PIONEER_API_KEY=your_key
 
 # Scraper Standalone
 SCRAPER_URL=http://localhost:8090
 SCRAPER_API_KEY=your_key
 ```
+
+### Defaults
+
+| Setting                    | Default                 | Description                                    |
+| -------------------------- | ----------------------- | ---------------------------------------------- |
+| `MAX_POSTS_PER_INGEST`     | 10                      | Posts scraped per ingestion request            |
+| `MAX_POSTS_HARD_LIMIT`     | 25                      | Absolute cap on posts per scrape               |
+| `TOP_INTERESTS_FOR_YUTORI` | 3                       | Top interests sent to Yutori for enrichment    |
+| `MAX_PARALLEL_REKA_CALLS`  | 2                       | Concurrent Reka image analysis calls           |
+| `API_TIMEOUT_SECONDS`      | 20                      | Timeout for external API calls (Pioneer, Reka) |
+| `MAX_RETRIES`              | 3                       | Retry count for failed API calls               |
+| `INGEST_COOLDOWN_MINUTES`  | 5                       | Cooldown between re-ingesting the same user    |
+| `SCRAPER_URL`              | `http://localhost:8090` | scraper-standalone service URL                 |
+
+### Pioneer Entity Labels
+
+The Pioneer GLiNER2 NER model extracts the following entity types from combined caption/bio text:
+
+`hobby` · `location` · `brand` · `activity` · `sport` · `food` · `music` · `art`
+
+Threshold: `0.5` (configurable per call)
 
 ## Architecture
 

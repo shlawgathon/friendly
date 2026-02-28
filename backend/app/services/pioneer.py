@@ -44,11 +44,16 @@ async def extract_entities(text: str, labels: list[str] | None = None, threshold
             resp.raise_for_status()
             result = resp.json()
 
-        # Normalize response
-        if isinstance(result, dict) and "entities" in result:
-            entities = result["entities"]
-        else:
-            entities = result
+        # Pioneer returns: {"result": {"entities": {...}}, "token_usage": N}
+        # Unwrap to get the actual entity dict
+        entities: dict = {}
+        if isinstance(result, dict):
+            inner = result.get("result", result)
+            if isinstance(inner, dict):
+                entities = inner.get("entities", inner)
+            # Fallback: top-level "entities" key
+            if not entities and "entities" in result:
+                entities = result["entities"]
 
         # Count total extracted
         total = sum(len(v) if isinstance(v, list) else 1 for v in entities.values()) if isinstance(entities, dict) else 0

@@ -142,62 +142,74 @@ async def find_matches(user_id: str, limit: int = 10) -> list[dict]:
         return [dict(record) async for record in result]
 
 
-async def get_graph_data(user_id: str) -> dict:
-    """Get full graph data for force-directed visualization."""
+async def get_graph_data(user_id: str, all_ids: list[str] | None = None) -> dict:
+    """Get full graph data for force-directed visualization.
+
+    If all_ids is provided, includes interests/brands for ALL listed users
+    (the primary user + synced friend accounts).
+    """
+    if not all_ids:
+        all_ids = [user_id]
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
     async with get_session() as session:
-        # Nodes: user + their interests + brands
+        # Fetch all users and their interests + brands
         result = await session.run(
             """
-            MATCH (me:User {id: $uid})
-            OPTIONAL MATCH (me)-[r:INTERESTED_IN]->(h:Hobby)
-            OPTIONAL MATCH (me)-[rf:KNOWS]->(b:Brand)
-            RETURN {id: me.id, label: me.username, type: 'self', pic: me.profile_pic_url} AS self_node,
+            UNWIND $ids AS uid
+            MATCH (u:User {id: uid})
+            OPTIONAL MATCH (u)-[r:INTERESTED_IN]->(h:Hobby)
+            OPTIONAL MATCH (u)-[rf:KNOWS]->(b:Brand)
+            RETURN u.id AS uid, u.username AS username, u.profile_pic_url AS pic,
                    collect(DISTINCT {id: h.name, label: h.name, type: 'hobby', weight: r.weight}) AS hobbies,
                    collect(DISTINCT {id: b.name, label: b.name, type: 'brand'}) AS brands
             """,
-            uid=user_id,
+            ids=all_ids,
         )
-        record = await result.single()
-        if not record:
-            return {"nodes": [], "edges": []}
 
-        nodes = [record["self_node"]]
-        edges = []
+        async for rec in result:
+            uid = rec["uid"]
+            node_type = "self" if uid == user_id else "user"
+            nodes.append({"id": uid, "label": rec["username"], "type": node_type, "pic": rec["pic"]})
 
-        for h in record["hobbies"]:
-            if h["id"]:
-                nodes.append(h)
-                edges.append({"source": user_id, "target": h["id"], "type": "INTERESTED_IN", "weight": h.get("weight", 0.5)})
+            for h in rec["hobbies"]:
+                if h["id"]:
+                    nodes.append(h)
+                    edges.append({"source": uid, "target": h["id"], "type": "INTERESTED_IN", "weight": h.get("weight", 0.5)})
 
-        for b in record["brands"]:
-            if b["id"]:
-                nodes.append(b)
-                edges.append({"source": user_id, "target": b["id"], "type": "KNOWS", "weight": 0.4})
+            for b in rec["brands"]:
+                if b["id"]:
+                    nodes.append(b)
+                    edges.append({"source": uid, "target": b["id"], "type": "KNOWS", "weight": 0.4})
 
-        # Find other users who share hobbies
+        # Find OTHER users (not in all_ids) who share hobbies with any of the queried users
         result2 = await session.run(
             """
-            MATCH (me:User {id: $uid})-[:INTERESTED_IN]->(h:Hobby)<-[r:INTERESTED_IN]-(other:User)
-            WHERE other.id <> $uid
+            UNWIND $ids AS uid
+            MATCH (me:User {id: uid})-[:INTERESTED_IN]->(h:Hobby)<-[r:INTERESTED_IN]-(other:User)
+            WHERE NOT other.id IN $ids
             RETURN DISTINCT other.id AS uid, other.username AS username, other.profile_pic_url AS pic,
                    collect(DISTINCT {hobby: h.name, weight: r.weight}) AS shared
             """,
-            uid=user_id,
+            ids=all_ids,
         )
         async for rec in result2:
             nodes.append({"id": rec["uid"], "label": rec["username"], "type": "user", "pic": rec["pic"]})
             for s in rec["shared"]:
                 edges.append({"source": rec["uid"], "target": s["hobby"], "type": "INTERESTED_IN", "weight": s.get("weight", 0.5)})
 
-        # Find other users who share brands
+        # Find OTHER users who share brands
         result3 = await session.run(
             """
-            MATCH (me:User {id: $uid})-[:KNOWS]->(b:Brand)<-[r:KNOWS]-(other:User)
-            WHERE other.id <> $uid
+            UNWIND $ids AS uid
+            MATCH (me:User {id: uid})-[:KNOWS]->(b:Brand)<-[r:KNOWS]-(other:User)
+            WHERE NOT other.id IN $ids
             RETURN DISTINCT other.id AS uid, other.username AS username, other.profile_pic_url AS pic,
                    collect(DISTINCT b.name) AS shared_brands
             """,
-            uid=user_id,
+            ids=all_ids,
         )
         async for rec in result3:
             nodes.append({"id": rec["uid"], "label": rec["username"], "type": "user", "pic": rec["pic"]})

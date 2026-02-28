@@ -41,8 +41,10 @@ export async function getMatches(userId: string) {
   return res.json();
 }
 
-export async function getGraphData(userId: string) {
-  const res = await fetch(`${API_BASE}/api/discover/graph?user_id=${userId}`);
+export async function getGraphData(userId: string, extraIds: string[] = []) {
+  const params = new URLSearchParams({ user_id: userId });
+  for (const id of extraIds) params.append("extra_ids", id);
+  const res = await fetch(`${API_BASE}/api/discover/graph?${params}`);
   if (!res.ok) throw new Error("Graph failed");
   return res.json();
 }

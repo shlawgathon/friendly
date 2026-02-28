@@ -1,7 +1,7 @@
 """Discovery routes — matches and graph data."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.models.dto import GraphData
 from app.services import graph
@@ -17,9 +17,10 @@ async def get_matches(user_id: str, limit: int = 10):
 
 
 @router.get("/graph", response_model=GraphData)
-async def get_graph(user_id: str):
+async def get_graph(user_id: str, extra_ids: list[str] = Query(default=[])):
     """Get force-directed graph data for visualization."""
-    data = await graph.get_graph_data(user_id)
+    all_ids = [user_id] + [eid for eid in extra_ids if eid != user_id]
+    data = await graph.get_graph_data(user_id, all_ids)
     return data
 
 
