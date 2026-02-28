@@ -399,12 +399,12 @@ async def store_enrichment_results(job_id: str, tier: str, results: dict) -> Non
 
 
 async def _write_tier2_nodes(job_id: str, results: dict) -> None:
-    """Write Event, Community, Meetup nodes branching from Hobby nodes."""
+    """Write Event, Community, Meetup nodes branching from SHARED Hobby nodes only."""
     if not results or results.get("status") in ("error", "timeout"):
         return
 
     async with get_session() as session:
-        # Get the user_id from the job so we can find their hobbies
+        # Get the user_id from the job
         r = await session.run(
             "MATCH (j:IngestJob {job_id: $jid}) RETURN j.user_id AS uid",
             jid=job_id,
@@ -414,12 +414,19 @@ async def _write_tier2_nodes(job_id: str, results: dict) -> None:
             return
         user_id = rec["uid"]
 
-        # Get user's hobbies to match enrichment results to topics
+        # Only get SHARED hobbies (connected to 2+ users = green nodes)
         r2 = await session.run(
-            "MATCH (u:User {id: $uid})-[:INTERESTED_IN]->(h:Hobby) RETURN h.name AS name",
+            """
+            MATCH (u:User {id: $uid})-[:INTERESTED_IN]->(h:Hobby)<-[:INTERESTED_IN]-(other:User)
+            WHERE other.id <> $uid
+            RETURN DISTINCT h.name AS name
+            """,
             uid=user_id,
         )
         hobby_names = [rec["name"] async for rec in r2]
+        if not hobby_names:
+            logger.info("No shared hobbies for %s — skipping enrichment nodes", user_id)
+            return
 
         # Helper: find best matching hobby for a title/description
         def _match_hobby(text: str) -> str | None:

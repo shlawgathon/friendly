@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models.dto import GraphData
-from app.services import graph
+from app.services import enrichment, graph
 
 router = APIRouter(prefix="/api/discover", tags=["discover"])
 
@@ -80,3 +80,42 @@ async def get_session(user_id: str):
             "accounts": accounts,
         }
 
+
+@router.get("/topic-enrichment")
+async def get_topic_enrichment(user_id: str, topic: str):
+    """Find online events/communities/meetups for one topic."""
+    cleaned_topic = topic.strip()
+    if not cleaned_topic:
+        raise HTTPException(status_code=400, detail="topic is required")
+
+    from app.db.neo4j import get_session as get_db_session
+
+    username = "user"
+    location = None
+
+    async with get_db_session() as session:
+        r = await session.run(
+            """
+            MATCH (u:User {id: $uid})
+            RETURN u.username AS username, u.location AS location
+            """,
+            uid=user_id,
+        )
+        rec = await r.single()
+        if rec:
+            username = rec["username"] or username
+            location = rec["location"] or None
+
+    data = await enrichment.run_tier2_enrichment(
+        username=username,
+        interests=[cleaned_topic],
+        location=location,
+    )
+
+    return {
+        "topic": cleaned_topic,
+        "events": data.get("events", []),
+        "communities": data.get("communities", []),
+        "meetups": data.get("meetups", []),
+        "status": data.get("status", "ok"),
+    }

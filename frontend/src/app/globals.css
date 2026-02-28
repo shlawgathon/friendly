@@ -216,3 +216,14 @@ body {
 .input-field::placeholder {
   color: var(--muted);
 }
+
+/* Graph node label text should never show selection highlight on click/drag */
+.graph-node-label {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  paint-order: stroke;
+  stroke: rgba(5, 5, 16, 0.9);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}

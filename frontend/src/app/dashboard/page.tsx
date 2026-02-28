@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, Suspense, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import * as d3 from "d3";
-import { useUser, SyncedAccount } from "@/lib/user-context";
-import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus, getEnrichmentStatus } from "@/lib/api";
+import { useUser } from "@/lib/user-context";
+import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus, getEnrichmentStatus, getTopicEnrichment } from "@/lib/api";
 
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
@@ -12,6 +12,7 @@ interface GraphNode extends d3.SimulationNodeDatum {
   type: "self" | "user" | "hobby" | "brand" | "event" | "community" | "meetup";
   pic?: string;
   weight?: number;
+  isSyncedAccount?: boolean;
 }
 
 interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
@@ -31,6 +32,12 @@ interface TierStatus {
   tier3: "pending" | "running" | "done";
 }
 
+interface TopicEnrichmentResult {
+  events: any[];
+  communities: any[];
+  meetups: any[];
+}
+
 function DashboardContent() {
   const router = useRouter();
   const { user, logout, addAccount, updateAccountStatus, removeAccount } = useUser();
@@ -41,6 +48,7 @@ function DashboardContent() {
   const [matches, setMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"account" | "interests">("account");
   const [newUsername, setNewUsername] = useState("");
   const [addError, setAddError] = useState("");
   const [addingAccount, setAddingAccount] = useState(false);
@@ -48,6 +56,12 @@ function DashboardContent() {
   const [tierStatus, setTierStatus] = useState<TierStatus>({ tier1: "pending", tier2: "pending", tier3: "pending" });
   const [showTimeline, setShowTimeline] = useState(false);
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
+  const [topicEnrichmentByNode, setTopicEnrichmentByNode] = useState<Record<string, TopicEnrichmentResult>>({});
+  const [topicLoadingNodeId, setTopicLoadingNodeId] = useState<string | null>(null);
+  const [topicError, setTopicError] = useState("");
+  const [expandedUserInterests, setExpandedUserInterests] = useState<Record<string, boolean>>({});
+  const [expandedSettingsProfiles, setExpandedSettingsProfiles] = useState<Record<string, boolean>>({});
+  const [expandedSettingsInterests, setExpandedSettingsInterests] = useState<Record<string, boolean>>({});
 
   // Redirect to landing if no user
   useEffect(() => {
@@ -55,6 +69,10 @@ function DashboardContent() {
   }, [user, router]);
 
   const userId = user?.userId || "";
+  const syncedAccountIds = useMemo(
+    () => new Set((user?.accounts || []).map((a) => `ig:${a.username.toLowerCase()}`)),
+    [user?.accounts]
+  );
 
   const loadGraph = useCallback(async () => {
     if (!userId) return;
@@ -69,15 +87,25 @@ function DashboardContent() {
         getGraphData(userId, extraIds),
         getMatches(userId),
       ]);
+
+      const graphWithSyncFlags = {
+        ...gData,
+        nodes: (gData.nodes || []).map((node: GraphNode) => (
+          node.type === "user" && syncedAccountIds.has(node.id)
+            ? { ...node, isSyncedAccount: true }
+            : node
+        )),
+      };
+
       setMatches(matchData.matches || []);
-      setGraphData(gData);
-      renderGraph(gData);
+      setGraphData(graphWithSyncFlags);
+      renderGraph(graphWithSyncFlags);
     } catch (e) {
       console.error("Graph load error:", e);
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, user?.accounts, syncedAccountIds]);
 
   useEffect(() => {
     loadGraph();
@@ -160,6 +188,8 @@ function DashboardContent() {
   const handleNodeClick = async (node: GraphNode) => {
     setSelectedNode(node);
     setShowSettings(false);
+    setExpandedUserInterests({});
+    setTopicError("");
     if (node.type === "user" && userId) {
       try {
         const res = await getIcebreaker(userId, node.id);
@@ -169,6 +199,13 @@ function DashboardContent() {
         setIcebreaker("Start by asking about their shared interests!");
         setSharedContext([]);
       }
+    } else {
+      setIcebreaker("");
+      setSharedContext([]);
+    }
+
+    if (node.type === "hobby" || node.type === "brand") {
+      await loadTopicForInterest(node);
     }
   };
 
@@ -176,6 +213,121 @@ function DashboardContent() {
     logout();
     router.push("/");
   };
+
+  const getEdgeNodeId = (nodeOrId: string | GraphNode) =>
+    typeof nodeOrId === "string" ? nodeOrId : nodeOrId.id;
+
+  const loadTopicForInterest = async (node: GraphNode) => {
+    if (!userId || (node.type !== "hobby" && node.type !== "brand")) return;
+    if (topicEnrichmentByNode[node.id]) return;
+
+    setTopicLoadingNodeId(node.id);
+    try {
+      const res = await getTopicEnrichment(userId, node.label);
+      setTopicEnrichmentByNode((prev) => ({
+        ...prev,
+        [node.id]: {
+          events: res.events || [],
+          communities: res.communities || [],
+          meetups: res.meetups || [],
+        },
+      }));
+    } catch {
+      setTopicError("Could not fetch live results. Showing saved graph links.");
+    } finally {
+      setTopicLoadingNodeId((curr) => (curr === node.id ? null : curr));
+    }
+  };
+
+  const getGraphTopicChildren = (topicId: string, edgeType: string) => {
+    if (!graphData) return [];
+    return graphData.edges
+      .filter((e) => getEdgeNodeId(e.source as string | GraphNode) === topicId && e.type === edgeType)
+      .map((e) => {
+        const targetId = getEdgeNodeId(e.target as string | GraphNode);
+        return graphData.nodes.find((n) => n.id === targetId);
+      })
+      .filter(Boolean);
+  };
+
+  const selectedUserInterestItems = useMemo(() => {
+    if (!selectedNode || (selectedNode.type !== "user" && selectedNode.type !== "self") || !graphData) return [];
+
+    const linkedInterestIds = new Set<string>();
+    for (const e of graphData.edges) {
+      const srcId = getEdgeNodeId(e.source as string | GraphNode);
+      const tgtId = getEdgeNodeId(e.target as string | GraphNode);
+      if (srcId === selectedNode.id) linkedInterestIds.add(tgtId);
+      if (tgtId === selectedNode.id) linkedInterestIds.add(srcId);
+    }
+
+    const selfInterestIds = new Set<string>();
+    for (const e of graphData.edges) {
+      const srcId = getEdgeNodeId(e.source as string | GraphNode);
+      const tgtId = getEdgeNodeId(e.target as string | GraphNode);
+      if (srcId === userId) selfInterestIds.add(tgtId);
+      if (tgtId === userId) selfInterestIds.add(srcId);
+    }
+
+    const sharedSet = new Set(sharedContext.map((s) => s.toLowerCase().trim()));
+    return graphData.nodes
+      .filter((n) => (n.type === "hobby" || n.type === "brand") && linkedInterestIds.has(n.id))
+      .map((n) => ({
+        node: n,
+        isShared: selfInterestIds.has(n.id) || sharedSet.has(n.label.toLowerCase().trim()),
+      }))
+      .sort((a, b) => {
+        if (a.isShared !== b.isShared) return a.isShared ? -1 : 1;
+        return a.node.label.localeCompare(b.node.label);
+      });
+  }, [selectedNode, graphData, userId, sharedContext]);
+
+  const settingsProfileInterestItems = useMemo(() => {
+    if (!graphData) return [];
+
+    const nodeById = new Map(graphData.nodes.map((n) => [n.id, n] as const));
+    const selfInterestIds = new Set<string>();
+    for (const e of graphData.edges) {
+      const srcId = getEdgeNodeId(e.source as string | GraphNode);
+      const tgtId = getEdgeNodeId(e.target as string | GraphNode);
+      if (srcId === userId) selfInterestIds.add(tgtId);
+      if (tgtId === userId) selfInterestIds.add(srcId);
+    }
+
+    const profiles = graphData.nodes
+      .filter((n) => n.type === "self" || n.type === "user")
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === "self" ? -1 : 1;
+        return a.label.localeCompare(b.label);
+      });
+
+    return profiles.map((profile) => {
+      const interestIds = new Set<string>();
+      for (const e of graphData.edges) {
+        const srcId = getEdgeNodeId(e.source as string | GraphNode);
+        const tgtId = getEdgeNodeId(e.target as string | GraphNode);
+        if (srcId === profile.id) {
+          const target = nodeById.get(tgtId);
+          if (target && (target.type === "hobby" || target.type === "brand")) interestIds.add(target.id);
+        }
+        if (tgtId === profile.id) {
+          const source = nodeById.get(srcId);
+          if (source && (source.type === "hobby" || source.type === "brand")) interestIds.add(source.id);
+        }
+      }
+
+      const interests = Array.from(interestIds)
+        .map((id) => nodeById.get(id))
+        .filter((n): n is GraphNode => !!n)
+        .map((n) => ({ node: n, isMatch: selfInterestIds.has(n.id) }))
+        .sort((a, b) => {
+          if (a.isMatch !== b.isMatch) return a.isMatch ? -1 : 1;
+          return a.node.label.localeCompare(b.node.label);
+        });
+
+      return { profile, interests };
+    });
+  }, [graphData, userId]);
 
   const renderGraph = (data: { nodes: GraphNode[]; edges: GraphEdge[] }) => {
     if (!svgRef.current || !data.nodes.length) return;
@@ -284,11 +436,13 @@ function DashboardContent() {
 
     node.append("text")
       .text((d) => d.label)
+      .attr("class", "graph-node-label")
       .attr("dy", (d) => nodeSize(d.type) + 16)
       .attr("text-anchor", "middle")
       .attr("fill", (d) => sharedNodeIds.has(d.id) ? "#86efac" : "#9ca3af")
       .attr("font-size", (d) => d.type === "hobby" ? "10px" : "12px")
-      .attr("font-weight", (d) => d.type === "self" || sharedNodeIds.has(d.id) ? "600" : "400");
+      .attr("font-weight", (d) => d.type === "self" || sharedNodeIds.has(d.id) ? "600" : "400")
+      .attr("pointer-events", "none");
 
     node.on("mouseover", function (_, d) {
       d3.select(this).select("circle").transition().duration(200)
@@ -338,7 +492,8 @@ function DashboardContent() {
             {/* Legend */}
             <div className="glass px-4 py-2 flex gap-4 text-xs">
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-violet-600" /> You</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-cyan-500" /> People</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-cyan-500" /> Synced Friends</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-sky-400" /> Suggested People</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Interests</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-green-500" /> Shared</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-rose-500" /> Events</span>
@@ -348,7 +503,12 @@ function DashboardContent() {
 
             {/* Account button */}
             <button
-              onClick={() => { setShowSettings(!showSettings); setSelectedNode(null); }}
+              onClick={() => {
+                const nextOpen = !showSettings;
+                setShowSettings(nextOpen);
+                if (nextOpen) setSettingsTab("account");
+                setSelectedNode(null);
+              }}
               className="glass w-10 h-10 rounded-full flex items-center justify-center hover:border-violet-500/50 transition-colors"
               id="account-btn"
             >
@@ -377,7 +537,7 @@ function DashboardContent() {
           <div className="p-6">
             {/* Profile header */}
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold">Account</h2>
+              <h2 className="text-lg font-semibold">Settings</h2>
               <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white">✕</button>
             </div>
 
@@ -391,6 +551,33 @@ function DashboardContent() {
               </div>
             </div>
 
+            <div className="mb-6 p-1 rounded-xl bg-white/5 border border-white/10 flex gap-1">
+              <button
+                type="button"
+                onClick={() => setSettingsTab("account")}
+                className={`flex-1 px-3 py-2 text-xs rounded-lg transition-colors ${
+                  settingsTab === "account"
+                    ? "bg-violet-500/20 text-violet-200 border border-violet-400/30"
+                    : "text-gray-400 hover:text-gray-200"
+                }`}
+              >
+                Account
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab("interests")}
+                className={`flex-1 px-3 py-2 text-xs rounded-lg transition-colors ${
+                  settingsTab === "interests"
+                    ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30"
+                    : "text-gray-400 hover:text-gray-200"
+                }`}
+              >
+                Interest Explorer
+              </button>
+            </div>
+
+            {settingsTab === "account" && (
+              <>
             {/* Synced Accounts */}
             <div className="mb-8">
               <h3 className="text-sm font-medium text-gray-400 mb-3">Synced Accounts</h3>
@@ -433,7 +620,162 @@ function DashboardContent() {
                 ))}
               </div>
             </div>
+              </>
+            )}
 
+            {/* Interest Explorer */}
+            {settingsTab === "interests" && (
+            <div className="mb-8">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Interest Explorer</h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Browse profiles and interests from the sidebar, no graph clicks needed.
+              </p>
+              <div className="space-y-2">
+                {settingsProfileInterestItems.length === 0 && (
+                  <div className="glass p-3 text-xs text-gray-500">No profile interests loaded yet.</div>
+                )}
+                {settingsProfileInterestItems.map(({ profile, interests }) => {
+                  const profileOpen = !!expandedSettingsProfiles[profile.id];
+                  return (
+                    <div key={profile.id} className="glass p-2 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedSettingsProfiles((prev) => ({ ...prev, [profile.id]: !profileOpen }))}
+                        className="w-full flex items-center justify-between px-2 py-1.5 text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${profile.type === "self" ? "bg-violet-400" : "bg-cyan-400"}`} />
+                          <span className="text-sm font-medium">
+                            {profile.type === "self" ? "You" : `@${profile.label}`}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-400">
+                          {interests.length} interests {profileOpen ? "▾" : "▸"}
+                        </span>
+                      </button>
+
+                      {profileOpen && (
+                        <div className="mt-2 space-y-2 px-1 pb-1">
+                          {interests.length === 0 && (
+                            <p className="text-[11px] text-gray-500 px-2">No interests found.</p>
+                          )}
+                          {interests.map((interestItem) => {
+                            const interest = interestItem.node;
+                            const interestKey = `${profile.id}:${interest.id}`;
+                            const interestOpen = !!expandedSettingsInterests[interestKey];
+                            const online = topicEnrichmentByNode[interest.id];
+                            const events = (online?.events?.length || 0) > 0
+                              ? online.events
+                              : getGraphTopicChildren(interest.id, "HAS_EVENT");
+                            const communities = (online?.communities?.length || 0) > 0
+                              ? online.communities
+                              : getGraphTopicChildren(interest.id, "HAS_COMMUNITY");
+                            const meetups = (online?.meetups?.length || 0) > 0
+                              ? online.meetups
+                              : getGraphTopicChildren(interest.id, "HAS_MEETUP");
+
+                            return (
+                              <div key={interestKey} className="rounded-lg border border-white/10 px-2 py-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const willExpand = !interestOpen;
+                                    setExpandedSettingsInterests((prev) => ({ ...prev, [interestKey]: willExpand }));
+                                    if (willExpand) void loadTopicForInterest(interest);
+                                  }}
+                                  className="w-full flex items-center justify-between text-left"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium">{interest.label}</span>
+                                    {profile.type !== "self" && interestItem.isMatch && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                        Interest Match
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-gray-400">{interestOpen ? "▾" : "▸"}</span>
+                                </button>
+
+                                {interestOpen && (
+                                  <div className="mt-2 space-y-2">
+                                    {topicLoadingNodeId === interest.id && !online && (
+                                      <p className="text-[11px] text-cyan-400">Loading live results...</p>
+                                    )}
+                                    {topicError && (
+                                      <p className="text-[11px] text-amber-400">{topicError}</p>
+                                    )}
+
+                                    <details className="rounded-md border border-white/10 px-2 py-1.5">
+                                      <summary className="cursor-pointer text-[11px] text-gray-300">Events ({events.length})</summary>
+                                      <div className="mt-1 space-y-1">
+                                        {events.length === 0 && <p className="text-[10px] text-gray-500">No events yet.</p>}
+                                        {events.slice(0, 3).map((evt: any, i: number) => (
+                                          <a
+                                            key={i}
+                                            href={evt.url || evt.id}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block text-[11px] text-gray-300 hover:text-rose-300"
+                                          >
+                                            {evt.title || evt.label}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </details>
+
+                                    <details className="rounded-md border border-white/10 px-2 py-1.5">
+                                      <summary className="cursor-pointer text-[11px] text-gray-300">
+                                        Communities ({communities.length})
+                                      </summary>
+                                      <div className="mt-1 space-y-1">
+                                        {communities.length === 0 && <p className="text-[10px] text-gray-500">No communities yet.</p>}
+                                        {communities.slice(0, 3).map((comm: any, i: number) => (
+                                          <a
+                                            key={i}
+                                            href={comm.url || comm.id}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block text-[11px] text-gray-300 hover:text-blue-300"
+                                          >
+                                            {comm.name || comm.label}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </details>
+
+                                    <details className="rounded-md border border-white/10 px-2 py-1.5">
+                                      <summary className="cursor-pointer text-[11px] text-gray-300">Meetups ({meetups.length})</summary>
+                                      <div className="mt-1 space-y-1">
+                                        {meetups.length === 0 && <p className="text-[10px] text-gray-500">No meetups yet.</p>}
+                                        {meetups.slice(0, 3).map((mt: any, i: number) => (
+                                          <a
+                                            key={i}
+                                            href={mt.url || mt.id}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block text-[11px] text-gray-300 hover:text-teal-300"
+                                          >
+                                            {mt.name || mt.label}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </details>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            )}
+
+            {settingsTab === "account" && (
+              <>
             {/* Add Another Account */}
             <div className="mb-8">
               <h3 className="text-sm font-medium text-gray-400 mb-3">Add Another Account</h3>
@@ -482,6 +824,8 @@ function DashboardContent() {
                 Sign Out
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -566,9 +910,9 @@ function DashboardContent() {
             <button onClick={() => setSelectedNode(null)} className="text-gray-500 hover:text-white">✕</button>
           </div>
 
-          {selectedNode.type === "user" && (
+          {(selectedNode.type === "user" || selectedNode.type === "self") && (
             <>
-              {sharedContext.length > 0 && (
+              {selectedNode.type === "user" && sharedContext.length > 0 && (
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Shared Interests</h3>
                   <div className="flex flex-wrap gap-2">
@@ -580,12 +924,145 @@ function DashboardContent() {
                   </div>
                 </div>
               )}
-              <div className="gradient-border p-px rounded-xl mb-6">
-                <div className="bg-surface rounded-xl p-4">
-                  <h3 className="text-sm font-medium text-gray-400 mb-2">💬 Conversation Starter</h3>
-                  <p className="text-sm leading-relaxed">{icebreaker || "Loading..."}</p>
+
+              <div className="mb-6">
+                <h3 className="text-sm font-medium text-gray-400 mb-3">Connected Interests</h3>
+                <div className="space-y-2">
+                  {selectedUserInterestItems.length === 0 && (
+                    <div className="glass p-3 text-xs text-gray-500">No connected interests found yet.</div>
+                  )}
+                  {selectedUserInterestItems.map((item) => {
+                    const isExpanded = !!expandedUserInterests[item.node.id];
+                    const online = topicEnrichmentByNode[item.node.id];
+                    const events = (online?.events?.length || 0) > 0
+                      ? online.events
+                      : getGraphTopicChildren(item.node.id, "HAS_EVENT");
+                    const communities = (online?.communities?.length || 0) > 0
+                      ? online.communities
+                      : getGraphTopicChildren(item.node.id, "HAS_COMMUNITY");
+                    const meetups = (online?.meetups?.length || 0) > 0
+                      ? online.meetups
+                      : getGraphTopicChildren(item.node.id, "HAS_MEETUP");
+
+                    return (
+                      <div key={item.node.id} className="glass p-2 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const willExpand = !isExpanded;
+                            setExpandedUserInterests((prev) => ({ ...prev, [item.node.id]: willExpand }));
+                            if (willExpand) void loadTopicForInterest(item.node);
+                          }}
+                          className="w-full flex items-center justify-between px-2 py-1.5 text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{item.node.label}</span>
+                            {item.isShared && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                Interest Match
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-400">{isExpanded ? "▾" : "▸"}</span>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="mt-2 space-y-2 px-1 pb-1">
+                            {topicLoadingNodeId === item.node.id && !online && (
+                              <p className="text-[11px] text-cyan-400">Loading live results...</p>
+                            )}
+                            {topicError && (
+                              <p className="text-[11px] text-amber-400">{topicError}</p>
+                            )}
+
+                            <details className="rounded-lg border border-white/10 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-medium text-gray-300">
+                                Events ({events.length})
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {events.length === 0 && (
+                                  <p className="text-[11px] text-gray-500">No events yet.</p>
+                                )}
+                                {events.slice(0, 4).map((evt: any, i: number) => (
+                                  <a
+                                    key={i}
+                                    href={evt.url || evt.id}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-lg border border-white/10 p-2 hover:border-rose-500/30"
+                                  >
+                                    <p className="text-xs font-medium">{evt.title || evt.label}</p>
+                                    <p className="text-[10px] text-gray-500">{evt.date || ""} {evt.location ? `· ${evt.location}` : ""}</p>
+                                  </a>
+                                ))}
+                              </div>
+                            </details>
+
+                            <details className="rounded-lg border border-white/10 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-medium text-gray-300">
+                                Communities ({communities.length})
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {communities.length === 0 && (
+                                  <p className="text-[11px] text-gray-500">No communities yet.</p>
+                                )}
+                                {communities.slice(0, 4).map((comm: any, i: number) => (
+                                  <a
+                                    key={i}
+                                    href={comm.url || comm.id}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-lg border border-white/10 p-2 hover:border-blue-500/30"
+                                  >
+                                    <p className="text-xs font-medium">{comm.name || comm.label}</p>
+                                    {(comm.subscriber_count || comm.subs || 0) > 0 && (
+                                      <p className="text-[10px] text-gray-500">
+                                        {(((comm.subscriber_count || comm.subs) as number) / 1000).toFixed(1)}k members
+                                      </p>
+                                    )}
+                                  </a>
+                                ))}
+                              </div>
+                            </details>
+
+                            <details className="rounded-lg border border-white/10 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-medium text-gray-300">
+                                Meetups ({meetups.length})
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {meetups.length === 0 && (
+                                  <p className="text-[11px] text-gray-500">No meetups yet.</p>
+                                )}
+                                {meetups.slice(0, 4).map((mt: any, i: number) => (
+                                  <a
+                                    key={i}
+                                    href={mt.url || mt.id}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-lg border border-white/10 p-2 hover:border-teal-500/30"
+                                  >
+                                    <p className="text-xs font-medium">{mt.name || mt.label}</p>
+                                    <p className="text-[10px] text-gray-500">{mt.date || ""} {mt.location ? `· ${mt.location}` : ""}</p>
+                                  </a>
+                                ))}
+                              </div>
+                            </details>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+
+              {selectedNode.type === "user" && (
+                <div className="gradient-border p-px rounded-xl mb-6">
+                  <div className="bg-surface rounded-xl p-4">
+                    <h3 className="text-sm font-medium text-gray-400 mb-2">💬 Conversation Starter</h3>
+                    <p className="text-sm leading-relaxed">{icebreaker || "Loading..."}</p>
+                  </div>
+                </div>
+              )}
 
               {/* Vibe info from Tier 3 */}
               {enrichment?.tier3?.vibe?.mood && (
@@ -632,21 +1109,39 @@ function DashboardContent() {
                       <div key={linkedId} className="glass p-3 flex items-center gap-3 cursor-pointer hover:border-violet-500/30 transition-colors"
                         onClick={() => handleNodeClick(linkedNode)}>
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                          linkedNode.type === "self" ? "bg-violet-500/20 text-violet-400" : "bg-cyan-500/20 text-cyan-400"
+                          linkedNode.type === "self"
+                            ? "bg-violet-500/20 text-violet-400"
+                            : linkedNode.isSyncedAccount
+                              ? "bg-cyan-500/20 text-cyan-400"
+                              : "bg-sky-500/20 text-sky-400"
                         }`}>
                           {linkedNode.label[0]?.toUpperCase()}
                         </div>
                         <div>
                           <p className="text-sm font-medium">{linkedNode.label}</p>
-                          <p className="text-[10px] text-gray-500">{linkedNode.type === "self" ? "You" : "Friend"}</p>
+                          <p className="text-[10px] text-gray-500">
+                            {linkedNode.type === "self"
+                              ? "You"
+                              : linkedNode.isSyncedAccount
+                                ? "Synced Friend"
+                                : "Suggested Match"}
+                          </p>
                         </div>
                       </div>
                     );
                   })}
               </div>
 
-              {/* Events branching from this topic (from graph edges) */}
+              {topicLoadingNodeId === selectedNode.id && (
+                <p className="text-xs text-cyan-400 mb-4">Finding live events, communities, and meetups...</p>
+              )}
+              {topicError && (
+                <p className="text-xs text-amber-400 mb-4">{topicError}</p>
+              )}
+
+              {/* Events */}
               {(() => {
+                const online = topicEnrichmentByNode[selectedNode.id]?.events || [];
                 const connectedEvents = graphData?.edges
                   .filter((e: any) => {
                     const srcId = typeof e.source === "string" ? e.source : e.source.id;
@@ -657,19 +1152,29 @@ function DashboardContent() {
                     return graphData.nodes.find((n) => n.id === tgtId);
                   })
                   .filter(Boolean) || [];
-                return connectedEvents.length > 0 ? (
+                const eventsToShow = online.length > 0 ? online : connectedEvents;
+                return eventsToShow.length > 0 ? (
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-gray-400 mb-3">🎫 Events</h3>
                     <div className="space-y-2">
-                      {connectedEvents.slice(0, 5).map((evt: any, i: number) => (
-                        <a key={i} href={evt.id} target="_blank" rel="noopener noreferrer"
-                          className="glass p-3 block hover:border-rose-500/30 transition-colors group">
-                          <p className="text-sm font-medium group-hover:text-rose-400 transition-colors">{evt.label}</p>
+                      {eventsToShow.slice(0, 5).map((evt: any, i: number) => (
+                        <a
+                          key={i}
+                          href={evt.url || evt.id}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-rose-500/30 transition-colors group"
+                        >
+                          <p className="text-sm font-medium group-hover:text-rose-400 transition-colors">
+                            {evt.title || evt.label}
+                          </p>
                           <div className="flex items-center gap-2 mt-1">
-                            {evt.date && <span className="text-[10px] text-amber-400">📅 {evt.date}</span>}
-                            {evt.location && <span className="text-[10px] text-gray-500">📍 {evt.location}</span>}
+                            {(evt.date || "").trim() && <span className="text-[10px] text-amber-400">📅 {evt.date}</span>}
+                            {(evt.location || "").trim() && <span className="text-[10px] text-gray-500">📍 {evt.location}</span>}
                           </div>
-                          {evt.desc && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{evt.desc}</p>}
+                          {(evt.description || evt.desc) && (
+                            <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{evt.description || evt.desc}</p>
+                          )}
                         </a>
                       ))}
                     </div>
@@ -677,8 +1182,9 @@ function DashboardContent() {
                 ) : null;
               })()}
 
-              {/* Communities branching from this topic */}
+              {/* Communities */}
               {(() => {
+                const online = topicEnrichmentByNode[selectedNode.id]?.communities || [];
                 const connectedComms = graphData?.edges
                   .filter((e: any) => {
                     const srcId = typeof e.source === "string" ? e.source : e.source.id;
@@ -689,20 +1195,30 @@ function DashboardContent() {
                     return graphData.nodes.find((n) => n.id === tgtId);
                   })
                   .filter(Boolean) || [];
-                return connectedComms.length > 0 ? (
+                const communitiesToShow = online.length > 0 ? online : connectedComms;
+                return communitiesToShow.length > 0 ? (
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-gray-400 mb-3">💬 Communities</h3>
                     <div className="space-y-2">
-                      {connectedComms.slice(0, 4).map((comm: any, i: number) => (
-                        <a key={i} href={comm.id} target="_blank" rel="noopener noreferrer"
-                          className="glass p-3 block hover:border-blue-500/30 transition-colors group">
+                      {communitiesToShow.slice(0, 4).map((comm: any, i: number) => (
+                        <a
+                          key={i}
+                          href={comm.url || comm.id}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-blue-500/30 transition-colors group"
+                        >
                           <div className="flex items-center justify-between">
-                            <p className="text-sm font-medium group-hover:text-blue-400 transition-colors">{comm.label}</p>
-                            {comm.subs > 0 && (
-                              <span className="text-[10px] text-gray-500">{(comm.subs / 1000).toFixed(1)}k</span>
+                            <p className="text-sm font-medium group-hover:text-blue-400 transition-colors">{comm.name || comm.label}</p>
+                            {(comm.subscriber_count || comm.subs || 0) > 0 && (
+                              <span className="text-[10px] text-gray-500">
+                                {(((comm.subscriber_count || comm.subs) as number) / 1000).toFixed(1)}k
+                              </span>
                             )}
                           </div>
-                          {comm.desc && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{comm.desc}</p>}
+                          {(comm.description || comm.desc) && (
+                            <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{comm.description || comm.desc}</p>
+                          )}
                         </a>
                       ))}
                     </div>
@@ -710,8 +1226,9 @@ function DashboardContent() {
                 ) : null;
               })()}
 
-              {/* Meetups branching from this topic */}
+              {/* Meetups */}
               {(() => {
+                const online = topicEnrichmentByNode[selectedNode.id]?.meetups || [];
                 const connectedMeetups = graphData?.edges
                   .filter((e: any) => {
                     const srcId = typeof e.source === "string" ? e.source : e.source.id;
@@ -722,18 +1239,24 @@ function DashboardContent() {
                     return graphData.nodes.find((n) => n.id === tgtId);
                   })
                   .filter(Boolean) || [];
-                return connectedMeetups.length > 0 ? (
+                const meetupsToShow = online.length > 0 ? online : connectedMeetups;
+                return meetupsToShow.length > 0 ? (
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-gray-400 mb-3">🤝 Meetups</h3>
                     <div className="space-y-2">
-                      {connectedMeetups.slice(0, 4).map((mt: any, i: number) => (
-                        <a key={i} href={mt.id} target="_blank" rel="noopener noreferrer"
-                          className="glass p-3 block hover:border-teal-500/30 transition-colors group">
-                          <p className="text-sm font-medium group-hover:text-teal-400 transition-colors">{mt.label}</p>
+                      {meetupsToShow.slice(0, 4).map((mt: any, i: number) => (
+                        <a
+                          key={i}
+                          href={mt.url || mt.id}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-teal-500/30 transition-colors group"
+                        >
+                          <p className="text-sm font-medium group-hover:text-teal-400 transition-colors">{mt.name || mt.label}</p>
                           <div className="flex items-center gap-2 mt-1">
-                            {mt.date && <span className="text-[10px] text-amber-400">📅 {mt.date}</span>}
-                            {mt.location && <span className="text-[10px] text-gray-500">📍 {mt.location}</span>}
-                            {mt.attendees > 0 && <span className="text-[10px] text-gray-500">👥 {mt.attendees}</span>}
+                            {(mt.date || "").trim() && <span className="text-[10px] text-amber-400">📅 {mt.date}</span>}
+                            {(mt.location || "").trim() && <span className="text-[10px] text-gray-500">📍 {mt.location}</span>}
+                            {(mt.attendees || 0) > 0 && <span className="text-[10px] text-gray-500">👥 {mt.attendees}</span>}
                           </div>
                         </a>
                       ))}
@@ -743,6 +1266,13 @@ function DashboardContent() {
               })()}
             </div>
           )}
+        </div>
+      )}
+
+      {!showSettings && !selectedNode && (
+        <div className="absolute bottom-6 right-6 z-20 glass p-3 rounded-xl text-xs text-gray-300 max-w-xs">
+          <p className="font-medium text-white mb-1">Quick tips</p>
+          <p>Drag to move nodes, scroll to zoom, click any node for details and live links.</p>
         </div>
       )}
     </div>

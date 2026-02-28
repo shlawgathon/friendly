@@ -70,3 +70,10 @@ export async function getSession(userId: string) {
   if (!res.ok) throw new Error("Session restore failed");
   return res.json();
 }
+
+export async function getTopicEnrichment(userId: string, topic: string) {
+  const params = new URLSearchParams({ user_id: userId, topic });
+  const res = await fetch(`${API_BASE}/api/discover/topic-enrichment?${params}`);
+  if (!res.ok) throw new Error("Topic enrichment failed");
+  return res.json();
+}
