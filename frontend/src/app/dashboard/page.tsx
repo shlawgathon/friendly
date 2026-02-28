@@ -645,69 +645,102 @@ function DashboardContent() {
                   })}
               </div>
 
-              {/* Events for this interest from Tier 2 */}
-              {enrichment?.tier2?.events?.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-400 mb-3">🎫 Nearby Events</h3>
-                  <div className="space-y-2">
-                    {enrichment!.tier2.events
-                      .filter((evt: any) => evt.title?.toLowerCase().includes(selectedNode.label.toLowerCase()) || true)
-                      .slice(0, 5)
-                      .map((evt: any, i: number) => (
-                        <a key={i} href={evt.url} target="_blank" rel="noopener noreferrer"
-                          className="glass p-3 block hover:border-cyan-500/30 transition-colors group">
-                          <p className="text-sm font-medium group-hover:text-cyan-400 transition-colors">{evt.title}</p>
+              {/* Events branching from this topic (from graph edges) */}
+              {(() => {
+                const connectedEvents = graphData?.edges
+                  .filter((e: any) => {
+                    const srcId = typeof e.source === "string" ? e.source : e.source.id;
+                    return srcId === selectedNode.id && e.type === "HAS_EVENT";
+                  })
+                  .map((e: any) => {
+                    const tgtId = typeof e.target === "string" ? e.target : e.target.id;
+                    return graphData.nodes.find((n) => n.id === tgtId);
+                  })
+                  .filter(Boolean) || [];
+                return connectedEvents.length > 0 ? (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-gray-400 mb-3">🎫 Events</h3>
+                    <div className="space-y-2">
+                      {connectedEvents.slice(0, 5).map((evt: any, i: number) => (
+                        <a key={i} href={evt.id} target="_blank" rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-rose-500/30 transition-colors group">
+                          <p className="text-sm font-medium group-hover:text-rose-400 transition-colors">{evt.label}</p>
                           <div className="flex items-center gap-2 mt-1">
                             {evt.date && <span className="text-[10px] text-amber-400">📅 {evt.date}</span>}
                             {evt.location && <span className="text-[10px] text-gray-500">📍 {evt.location}</span>}
                           </div>
-                          {evt.description && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{evt.description}</p>}
+                          {evt.desc && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{evt.desc}</p>}
                         </a>
                       ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : null;
+              })()}
 
-              {/* Communities from Tier 2 */}
-              {enrichment?.tier2?.communities?.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-400 mb-3">💬 Communities</h3>
-                  <div className="space-y-2">
-                    {enrichment!.tier2.communities.slice(0, 4).map((comm: any, i: number) => (
-                      <a key={i} href={comm.url} target="_blank" rel="noopener noreferrer"
-                        className="glass p-3 block hover:border-violet-500/30 transition-colors group">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium group-hover:text-violet-400 transition-colors">{comm.name}</p>
-                          {comm.subscriber_count > 0 && (
-                            <span className="text-[10px] text-gray-500">{(comm.subscriber_count / 1000).toFixed(1)}k</span>
-                          )}
-                        </div>
-                        {comm.description && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{comm.description}</p>}
-                      </a>
-                    ))}
+              {/* Communities branching from this topic */}
+              {(() => {
+                const connectedComms = graphData?.edges
+                  .filter((e: any) => {
+                    const srcId = typeof e.source === "string" ? e.source : e.source.id;
+                    return srcId === selectedNode.id && e.type === "HAS_COMMUNITY";
+                  })
+                  .map((e: any) => {
+                    const tgtId = typeof e.target === "string" ? e.target : e.target.id;
+                    return graphData.nodes.find((n) => n.id === tgtId);
+                  })
+                  .filter(Boolean) || [];
+                return connectedComms.length > 0 ? (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-gray-400 mb-3">💬 Communities</h3>
+                    <div className="space-y-2">
+                      {connectedComms.slice(0, 4).map((comm: any, i: number) => (
+                        <a key={i} href={comm.id} target="_blank" rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-blue-500/30 transition-colors group">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium group-hover:text-blue-400 transition-colors">{comm.label}</p>
+                            {comm.subs > 0 && (
+                              <span className="text-[10px] text-gray-500">{(comm.subs / 1000).toFixed(1)}k</span>
+                            )}
+                          </div>
+                          {comm.desc && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{comm.desc}</p>}
+                        </a>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : null;
+              })()}
 
-              {/* Meetups from Tier 2 */}
-              {enrichment?.tier2?.meetups?.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-400 mb-3">🤝 Meetups</h3>
-                  <div className="space-y-2">
-                    {enrichment!.tier2.meetups.slice(0, 4).map((mt: any, i: number) => (
-                      <a key={i} href={mt.url} target="_blank" rel="noopener noreferrer"
-                        className="glass p-3 block hover:border-emerald-500/30 transition-colors group">
-                        <p className="text-sm font-medium group-hover:text-emerald-400 transition-colors">{mt.name}</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          {mt.date && <span className="text-[10px] text-amber-400">📅 {mt.date}</span>}
-                          {mt.location && <span className="text-[10px] text-gray-500">📍 {mt.location}</span>}
-                          {mt.attendees > 0 && <span className="text-[10px] text-gray-500">👥 {mt.attendees}</span>}
-                        </div>
-                      </a>
-                    ))}
+              {/* Meetups branching from this topic */}
+              {(() => {
+                const connectedMeetups = graphData?.edges
+                  .filter((e: any) => {
+                    const srcId = typeof e.source === "string" ? e.source : e.source.id;
+                    return srcId === selectedNode.id && e.type === "HAS_MEETUP";
+                  })
+                  .map((e: any) => {
+                    const tgtId = typeof e.target === "string" ? e.target : e.target.id;
+                    return graphData.nodes.find((n) => n.id === tgtId);
+                  })
+                  .filter(Boolean) || [];
+                return connectedMeetups.length > 0 ? (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-gray-400 mb-3">🤝 Meetups</h3>
+                    <div className="space-y-2">
+                      {connectedMeetups.slice(0, 4).map((mt: any, i: number) => (
+                        <a key={i} href={mt.id} target="_blank" rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-teal-500/30 transition-colors group">
+                          <p className="text-sm font-medium group-hover:text-teal-400 transition-colors">{mt.label}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            {mt.date && <span className="text-[10px] text-amber-400">📅 {mt.date}</span>}
+                            {mt.location && <span className="text-[10px] text-gray-500">📍 {mt.location}</span>}
+                            {mt.attendees > 0 && <span className="text-[10px] text-gray-500">👥 {mt.attendees}</span>}
+                          </div>
+                        </a>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : null;
+              })()}
             </div>
           )}
         </div>
