@@ -216,6 +216,37 @@ async def get_graph_data(user_id: str, all_ids: list[str] | None = None) -> dict
             for brand in rec["shared_brands"]:
                 edges.append({"source": rec["uid"], "target": brand, "type": "KNOWS", "weight": 0.4})
 
+        # ── Enrichment nodes branching from Hobbies ──
+        result4 = await session.run(
+            """
+            UNWIND $ids AS uid
+            MATCH (u:User {id: uid})-[:INTERESTED_IN]->(h:Hobby)
+            OPTIONAL MATCH (h)-[:HAS_EVENT]->(e:Event)
+            OPTIONAL MATCH (h)-[:HAS_COMMUNITY]->(c:Community)
+            OPTIONAL MATCH (h)-[:HAS_MEETUP]->(m:Meetup)
+            WITH h,
+                 collect(DISTINCT {id: e.url, label: e.title, type: 'event', date: e.date, location: e.location, desc: e.description}) AS events,
+                 collect(DISTINCT {id: c.url, label: c.name, type: 'community', subs: c.subscriber_count, desc: c.description}) AS comms,
+                 collect(DISTINCT {id: m.url, label: m.name, type: 'meetup', date: m.date, location: m.location, attendees: m.attendees}) AS meetups
+            RETURN h.name AS hobby, events, comms, meetups
+            """,
+            ids=all_ids,
+        )
+        async for rec in result4:
+            hobby_id = rec["hobby"]
+            for e in rec["events"]:
+                if e["id"]:
+                    nodes.append(e)
+                    edges.append({"source": hobby_id, "target": e["id"], "type": "HAS_EVENT", "weight": 0.3})
+            for c in rec["comms"]:
+                if c["id"]:
+                    nodes.append(c)
+                    edges.append({"source": hobby_id, "target": c["id"], "type": "HAS_COMMUNITY", "weight": 0.3})
+            for m in rec["meetups"]:
+                if m["id"]:
+                    nodes.append(m)
+                    edges.append({"source": hobby_id, "target": m["id"], "type": "HAS_MEETUP", "weight": 0.3})
+
         # Deduplicate nodes
         seen = set()
         unique_nodes = []
@@ -347,8 +378,10 @@ async def get_pending_tasks(older_than_minutes: int = 10) -> list[dict]:
 
 
 async def store_enrichment_results(job_id: str, tier: str, results: dict) -> None:
-    """Store enrichment results (tier2 or tier3) as JSON on the IngestJob node."""
+    """Store enrichment results as graph nodes branching from Hobby nodes."""
     import json as _json
+
+    # Always persist the raw JSON on the job node for the frontend timeline
     async with get_session() as session:
         prop_name = f"enrichment_{tier}"
         await session.run(
@@ -357,6 +390,143 @@ async def store_enrichment_results(job_id: str, tier: str, results: dict) -> Non
             SET j.{prop_name} = $data, j.updated_at = datetime()
             """,
             job_id=job_id, data=_json.dumps(results),
+        )
+
+    if tier == "tier2":
+        await _write_tier2_nodes(job_id, results)
+    elif tier == "tier3":
+        await _write_tier3_nodes(job_id, results)
+
+
+async def _write_tier2_nodes(job_id: str, results: dict) -> None:
+    """Write Event, Community, Meetup nodes branching from Hobby nodes."""
+    if not results or results.get("status") in ("error", "timeout"):
+        return
+
+    async with get_session() as session:
+        # Get the user_id from the job so we can find their hobbies
+        r = await session.run(
+            "MATCH (j:IngestJob {job_id: $jid}) RETURN j.user_id AS uid",
+            jid=job_id,
+        )
+        rec = await r.single()
+        if not rec:
+            return
+        user_id = rec["uid"]
+
+        # Get user's hobbies to match enrichment results to topics
+        r2 = await session.run(
+            "MATCH (u:User {id: $uid})-[:INTERESTED_IN]->(h:Hobby) RETURN h.name AS name",
+            uid=user_id,
+        )
+        hobby_names = [rec["name"] async for rec in r2]
+
+        # Helper: find best matching hobby for a title/description
+        def _match_hobby(text: str) -> str | None:
+            text_lower = (text or "").lower()
+            for h in hobby_names:
+                if h.lower() in text_lower:
+                    return h
+            # Default to first hobby if no direct match
+            return hobby_names[0] if hobby_names else None
+
+        # Write events
+        for evt in results.get("events", []):
+            hobby = _match_hobby(f"{evt.get('title', '')} {evt.get('description', '')}")
+            if not hobby:
+                continue
+            await session.run(
+                """
+                MERGE (e:Event {url: $url})
+                SET e.title = $title, e.date = $date,
+                    e.location = $location, e.description = $desc
+                WITH e
+                MATCH (h:Hobby {name: $hobby})
+                MERGE (h)-[:HAS_EVENT]->(e)
+                """,
+                url=evt.get("url", ""),
+                title=evt.get("title", ""),
+                date=evt.get("date", ""),
+                location=evt.get("location", ""),
+                desc=evt.get("description", ""),
+                hobby=hobby,
+            )
+
+        # Write communities
+        for comm in results.get("communities", []):
+            hobby = _match_hobby(f"{comm.get('name', '')} {comm.get('description', '')}")
+            if not hobby:
+                continue
+            await session.run(
+                """
+                MERGE (c:Community {url: $url})
+                SET c.name = $name, c.description = $desc,
+                    c.subscriber_count = $subs
+                WITH c
+                MATCH (h:Hobby {name: $hobby})
+                MERGE (h)-[:HAS_COMMUNITY]->(c)
+                """,
+                url=comm.get("url", ""),
+                name=comm.get("name", ""),
+                desc=comm.get("description", ""),
+                subs=comm.get("subscriber_count", 0),
+                hobby=hobby,
+            )
+
+        # Write meetups
+        for mt in results.get("meetups", []):
+            hobby = _match_hobby(f"{mt.get('name', '')} {mt.get('location', '')}")
+            if not hobby:
+                continue
+            await session.run(
+                """
+                MERGE (m:Meetup {url: $url})
+                SET m.name = $name, m.date = $date,
+                    m.location = $location, m.attendees = $attendees
+                WITH m
+                MATCH (h:Hobby {name: $hobby})
+                MERGE (h)-[:HAS_MEETUP]->(m)
+                """,
+                url=mt.get("url", ""),
+                name=mt.get("name", ""),
+                date=mt.get("date", ""),
+                location=mt.get("location", ""),
+                attendees=mt.get("attendees", 0),
+                hobby=hobby,
+            )
+
+
+async def _write_tier3_nodes(job_id: str, results: dict) -> None:
+    """Write Vibe node linked to the user."""
+    if not results or results.get("status") in ("error", "timeout"):
+        return
+    vibe = results.get("vibe", {})
+    if not vibe or not vibe.get("mood"):
+        return
+
+    async with get_session() as session:
+        r = await session.run(
+            "MATCH (j:IngestJob {job_id: $jid}) RETURN j.user_id AS uid",
+            jid=job_id,
+        )
+        rec = await r.single()
+        if not rec:
+            return
+
+        import json as _json
+        await session.run(
+            """
+            MATCH (u:User {id: $uid})
+            MERGE (v:Vibe {user_id: $uid})
+            SET v.mood = $mood, v.energy = $energy,
+                v.aesthetic_tags = $tags, v.themes = $themes
+            MERGE (u)-[:HAS_VIBE]->(v)
+            """,
+            uid=rec["uid"],
+            mood=vibe.get("mood", ""),
+            energy=vibe.get("energy", 0.5),
+            tags=_json.dumps(vibe.get("aesthetic_tags", [])),
+            themes=_json.dumps(vibe.get("content_themes", [])),
         )
 
 

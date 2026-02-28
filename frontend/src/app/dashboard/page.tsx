@@ -9,7 +9,7 @@ import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus,
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
   label: string;
-  type: "self" | "user" | "hobby" | "brand";
+  type: "self" | "user" | "hobby" | "brand" | "event" | "community" | "meetup";
   pic?: string;
   weight?: number;
 }
@@ -222,6 +222,9 @@ function DashboardContent() {
         case "user": return "#06b6d4";
         case "hobby": return "#f59e0b";
         case "brand": return "#f59e0b";
+        case "event": return "#f43f5e";
+        case "community": return "#3b82f6";
+        case "meetup": return "#14b8a6";
         default: return "#6b7280";
       }
     };
@@ -232,6 +235,9 @@ function DashboardContent() {
         case "user": return 18;
         case "hobby": return 12;
         case "brand": return 14;
+        case "event": return 8;
+        case "community": return 8;
+        case "meetup": return 8;
         default: return 10;
       }
     };
@@ -335,6 +341,9 @@ function DashboardContent() {
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-cyan-500" /> People</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Interests</span>
               <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-green-500" /> Shared</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-rose-500" /> Events</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-blue-500" /> Communities</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-teal-500" /> Meetups</span>
             </div>
 
             {/* Account button */}
