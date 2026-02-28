@@ -341,3 +341,55 @@ async def get_pending_tasks(older_than_minutes: int = 10) -> list[dict]:
             mins=older_than_minutes,
         )
         return [dict(record) async for record in result]
+
+
+# ── Enrichment Storage ──
+
+
+async def store_enrichment_results(job_id: str, tier: str, results: dict) -> None:
+    """Store enrichment results (tier2 or tier3) as JSON on the IngestJob node."""
+    import json as _json
+    async with get_session() as session:
+        prop_name = f"enrichment_{tier}"
+        await session.run(
+            f"""
+            MATCH (j:IngestJob {{job_id: $job_id}})
+            SET j.{prop_name} = $data, j.updated_at = datetime()
+            """,
+            job_id=job_id, data=_json.dumps(results),
+        )
+
+
+async def get_enrichment_results(job_id: str) -> dict:
+    """Retrieve enrichment results for a job."""
+    import json as _json
+    async with get_session() as session:
+        result = await session.run(
+            """
+            MATCH (j:IngestJob {job_id: $job_id})
+            RETURN j.enrichment_tier2 AS tier2,
+                   j.enrichment_tier3 AS tier3,
+                   j.status AS status,
+                   j.result AS result
+            """,
+            job_id=job_id,
+        )
+        record = await result.single()
+        if not record:
+            return {}
+
+        def _parse(val):
+            if not val:
+                return None
+            try:
+                return _json.loads(val) if isinstance(val, str) else val
+            except (TypeError, _json.JSONDecodeError):
+                return None
+
+        return {
+            "status": record["status"],
+            "result": _parse(record["result"]),
+            "tier2": _parse(record["tier2"]),
+            "tier3": _parse(record["tier3"]),
+        }
+

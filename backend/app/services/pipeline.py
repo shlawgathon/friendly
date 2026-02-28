@@ -7,7 +7,7 @@ import logging
 import uuid
 
 from app.config import settings
-from app.services import scraper, reka, pioneer, yutori, graph, modulate  # noqa: F401
+from app.services import scraper, reka, pioneer, yutori, graph, modulate, enrichment  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -120,16 +120,84 @@ async def run_instagram_ingest(job_id: str, username: str, user_id: str,
                 logger.warning("Yutori submit failed for '%s': %s", interest_name, e)
                 failed_steps.append(f"yutori:{interest_name}")
 
-        # ── Done ──
+        # ── Tier 1 Done — show graph immediately ──
+        interest_names = [i["hobby"] for i in interests]
+        # Extract location from entities for Tier 2
+        user_location = None
+        locs = entities.get("location", [])
+        if isinstance(locs, list) and locs:
+            user_location = locs[0] if isinstance(locs[0], str) else None
+
         await graph.update_ingest_job(
-            job_id, "completed",
-            result={"entities_added": entity_count, "posts_analyzed": len(posts), "failed_steps": failed_steps},
+            job_id, "tier1_done",
+            result={
+                "entities_added": entity_count,
+                "posts_analyzed": len(posts),
+                "failed_steps": failed_steps,
+                "enrichment": {"tier2": "pending", "tier3": "pending"},
+            },
         )
-        logger.info("Instagram ingest complete for @%s (job %s)", username, job_id)
+        logger.info("Tier 1 complete for @%s — firing enrichment", username)
+
+        # ── Fire Tier 2 + Tier 3 in background ──
+        asyncio.create_task(
+            _run_enrichment_background(
+                job_id, username, user_id,
+                interest_names, user_location,
+                entity_count, len(posts), failed_steps,
+            )
+        )
 
     except Exception as e:
         logger.exception("Pipeline error for job %s", job_id)
         await graph.update_ingest_job(job_id, "failed", error=str(e))
+
+
+async def _run_enrichment_background(
+    job_id: str, username: str, user_id: str,
+    interests: list[str], location: str | None,
+    entity_count: int, posts_count: int, failed_steps: list[str],
+) -> None:
+    """Run Tier 2 and Tier 3 enrichment in parallel, updating job progress."""
+    tier2_result: dict = {}
+    tier3_result: dict = {}
+
+    try:
+        # Update progress
+        await graph.update_ingest_job(
+            job_id, "enriching",
+            progress={"step": "enrichment", "tier2": "running", "tier3": "running"},
+        )
+
+        # Run both tiers in parallel
+        tier2_task = enrichment.run_tier2_enrichment(username, interests, location)
+        tier3_task = enrichment.run_tier3_enrichment(
+            username, f"https://www.instagram.com/{username}/", interests,
+        )
+        tier2_result, tier3_result = await asyncio.gather(
+            tier2_task, tier3_task, return_exceptions=False,
+        )
+    except Exception as e:
+        logger.error("Enrichment background error for @%s: %s", username, e)
+
+    # Store enrichment results
+    await graph.store_enrichment_results(job_id, "tier2", tier2_result)
+    await graph.store_enrichment_results(job_id, "tier3", tier3_result)
+
+    # Final completion
+    await graph.update_ingest_job(
+        job_id, "completed",
+        result={
+            "entities_added": entity_count,
+            "posts_analyzed": posts_count,
+            "failed_steps": failed_steps,
+            "enrichment": {
+                "tier2": tier2_result.get("status", "completed"),
+                "tier3": tier3_result.get("status", "completed"),
+            },
+        },
+    )
+    logger.info("All tiers complete for @%s (job %s)", username, job_id)
 
 
 async def _safe_reka_analyze(url: str, failed_steps: list[str], caption: str = "") -> str | None:

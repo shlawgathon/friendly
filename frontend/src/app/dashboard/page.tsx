@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import * as d3 from "d3";
 import { useUser, SyncedAccount } from "@/lib/user-context";
-import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus } from "@/lib/api";
+import { getGraphData, getMatches, getIcebreaker, ingestInstagram, getJobStatus, getEnrichmentStatus } from "@/lib/api";
 
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
@@ -17,6 +17,18 @@ interface GraphNode extends d3.SimulationNodeDatum {
 interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
   type: string;
   weight: number;
+}
+
+interface EnrichmentData {
+  tier2: any | null;
+  tier3: any | null;
+  status: string;
+}
+
+interface TierStatus {
+  tier1: "pending" | "running" | "done";
+  tier2: "pending" | "running" | "done";
+  tier3: "pending" | "running" | "done";
 }
 
 function DashboardContent() {
@@ -32,6 +44,10 @@ function DashboardContent() {
   const [newUsername, setNewUsername] = useState("");
   const [addError, setAddError] = useState("");
   const [addingAccount, setAddingAccount] = useState(false);
+  const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
+  const [tierStatus, setTierStatus] = useState<TierStatus>({ tier1: "pending", tier2: "pending", tier3: "pending" });
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
 
   // Redirect to landing if no user
   useEffect(() => {
@@ -49,12 +65,13 @@ function DashboardContent() {
         .map((a) => `ig:${a.username}`)
         .filter((id) => id !== userId);
 
-      const [graphData, matchData] = await Promise.all([
+      const [gData, matchData] = await Promise.all([
         getGraphData(userId, extraIds),
         getMatches(userId),
       ]);
       setMatches(matchData.matches || []);
-      renderGraph(graphData);
+      setGraphData(gData);
+      renderGraph(gData);
     } catch (e) {
       console.error("Graph load error:", e);
     } finally {
@@ -90,14 +107,44 @@ function DashboardContent() {
       });
       setNewUsername("");
 
-      // Poll this job in the background
+      setShowTimeline(true);
+      setTierStatus({ tier1: "running", tier2: "pending", tier3: "pending" });
+
+      // Poll job — show graph after tier1_done, continue polling enrichment
       const poll = setInterval(async () => {
         try {
           const job = await getJobStatus(res.job_id);
-          if (job.status === "completed" || job.status === "failed") {
+          if (job.status === "tier1_done" || job.status === "enriching" || job.status === "completed") {
+            // Tier 1 done — load graph immediately
+            if (tierStatus.tier1 !== "done") {
+              setTierStatus((prev) => ({ ...prev, tier1: "done", tier2: "running", tier3: "running" }));
+              updateAccountStatus(trimmed, "completed");
+              loadGraph();
+            }
+
+            // Poll enrichment
+            try {
+              const enr = await getEnrichmentStatus(res.job_id);
+              setEnrichment(enr);
+              const t2Done = enr.tier2 !== null;
+              const t3Done = enr.tier3 !== null;
+              setTierStatus((prev) => ({
+                ...prev,
+                tier2: t2Done ? "done" : "running",
+                tier3: t3Done ? "done" : "running",
+              }));
+            } catch {}
+
+            if (job.status === "completed") {
+              clearInterval(poll);
+              setTierStatus({ tier1: "done", tier2: "done", tier3: "done" });
+              // Auto-hide timeline after 5s
+              setTimeout(() => setShowTimeline(false), 8000);
+            }
+          } else if (job.status === "failed") {
             clearInterval(poll);
-            updateAccountStatus(trimmed, job.status === "completed" ? "completed" : "failed");
-            loadGraph(); // Refresh graph with new data
+            updateAccountStatus(trimmed, "failed");
+            setShowTimeline(false);
           }
         } catch {
           clearInterval(poll);
@@ -430,9 +477,81 @@ function DashboardContent() {
         </div>
       )}
 
+      {/* ── Timeline Overlay ── */}
+      {showTimeline && (
+        <div className="absolute bottom-6 left-6 z-20 glass p-4 rounded-2xl w-80 animate-fade-in">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold">Pipeline Progress</h3>
+            <button onClick={() => setShowTimeline(false)} className="text-gray-500 hover:text-white text-xs">✕</button>
+          </div>
+          <div className="space-y-3">
+            {/* Tier 1 */}
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                tierStatus.tier1 === "done" ? "bg-emerald-500/30 text-emerald-400" :
+                tierStatus.tier1 === "running" ? "bg-amber-500/30 text-amber-400 animate-pulse" :
+                "bg-gray-600/30 text-gray-500"
+              }`}>
+                {tierStatus.tier1 === "done" ? "✓" : "1"}
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-medium">Profile Analysis</p>
+                <p className="text-[10px] text-gray-500">
+                  {tierStatus.tier1 === "done" ? "Scraped, analyzed, entities extracted" :
+                   tierStatus.tier1 === "running" ? "Scraping & analyzing..." : "Waiting"}
+                </p>
+              </div>
+            </div>
+            {/* Tier 2 */}
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                tierStatus.tier2 === "done" ? "bg-emerald-500/30 text-emerald-400" :
+                tierStatus.tier2 === "running" ? "bg-cyan-500/30 text-cyan-400 animate-pulse" :
+                "bg-gray-600/30 text-gray-500"
+              }`}>
+                {tierStatus.tier2 === "done" ? "✓" : "2"}
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-medium">Events & Communities</p>
+                <p className="text-[10px] text-gray-500">
+                  {tierStatus.tier2 === "done"
+                    ? `${enrichment?.tier2?.events?.length || 0} events, ${enrichment?.tier2?.communities?.length || 0} communities`
+                    : tierStatus.tier2 === "running" ? "Searching Eventbrite, Reddit, Meetup..." : "Waiting"}
+                </p>
+              </div>
+            </div>
+            {/* Tier 3 */}
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                tierStatus.tier3 === "done" ? "bg-emerald-500/30 text-emerald-400" :
+                tierStatus.tier3 === "running" ? "bg-violet-500/30 text-violet-400 animate-pulse" :
+                "bg-gray-600/30 text-gray-500"
+              }`}>
+                {tierStatus.tier3 === "done" ? "✓" : "3"}
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-medium">Vibe Fingerprint</p>
+                <p className="text-[10px] text-gray-500">
+                  {tierStatus.tier3 === "done"
+                    ? `Mood: ${enrichment?.tier3?.vibe?.mood || "—"} · Energy: ${((enrichment?.tier3?.vibe?.energy || 0) * 100).toFixed(0)}%`
+                    : tierStatus.tier3 === "running" ? "Analyzing profile vibes..." : "Waiting"}
+                </p>
+              </div>
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-3 w-full h-1 rounded-full bg-gray-700 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-violet-500 via-cyan-400 to-emerald-400 transition-all duration-700"
+              style={{ width: `${([tierStatus.tier1, tierStatus.tier2, tierStatus.tier3].filter((s) => s === "done").length / 3) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* ── Connection Detail Panel ── */}
       {selectedNode && !showSettings && (
-        <div className="w-96 border-l border-white/5 bg-surface/80 backdrop-blur-xl p-6 animate-fade-in overflow-y-auto">
+        <div className="w-96 border-l border-white/5 bg-surface/80 backdrop-blur-xl p-6 animate-fade-in overflow-y-auto" style={{ maxHeight: "100vh" }}>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-lg font-semibold">{selectedNode.label}</h2>
             <button onClick={() => setSelectedNode(null)} className="text-gray-500 hover:text-white">✕</button>
@@ -452,33 +571,134 @@ function DashboardContent() {
                   </div>
                 </div>
               )}
-              <div className="gradient-border p-px rounded-xl">
+              <div className="gradient-border p-px rounded-xl mb-6">
                 <div className="bg-surface rounded-xl p-4">
                   <h3 className="text-sm font-medium text-gray-400 mb-2">💬 Conversation Starter</h3>
                   <p className="text-sm leading-relaxed">{icebreaker || "Loading..."}</p>
                 </div>
               </div>
+
+              {/* Vibe info from Tier 3 */}
+              {enrichment?.tier3?.vibe?.mood && (
+                <div className="glass p-4 rounded-xl mb-4">
+                  <h3 className="text-sm font-medium text-gray-400 mb-2">✨ Vibe</h3>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-lg">{enrichment.tier3.vibe.mood}</span>
+                    <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-violet-500 to-cyan-400 rounded-full" style={{ width: `${(enrichment.tier3.vibe.energy || 0) * 100}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-400">{((enrichment.tier3.vibe.energy || 0) * 100).toFixed(0)}%</span>
+                  </div>
+                  {enrichment.tier3.vibe.aesthetic_tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {enrichment.tier3.vibe.aesthetic_tags.map((tag: string) => (
+                        <span key={tag} className="px-2 py-0.5 rounded-full text-[10px] bg-violet-500/15 text-violet-300">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 
-          {selectedNode.type === "hobby" && (
+          {/* ── Interest / Brand node: show connected profiles ── */}
+          {(selectedNode.type === "hobby" || selectedNode.type === "brand") && (
             <div>
-              <h3 className="text-sm font-medium text-gray-400 mb-3">People who share this interest</h3>
-              <div className="space-y-2">
-                {matches
-                  .filter((m) => m.shared_interests?.includes(selectedNode.label))
-                  .map((m) => (
-                    <div key={m.user_id} className="glass p-3 flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center text-sm">
-                        {m.username?.[0]?.toUpperCase() || "?"}
+              {/* Connected profiles */}
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Connected Profiles</h3>
+              <div className="space-y-2 mb-6">
+                {graphData?.edges
+                  .filter((e: any) => {
+                    const srcId = typeof e.source === "string" ? e.source : e.source.id;
+                    const tgtId = typeof e.target === "string" ? e.target : e.target.id;
+                    return srcId === selectedNode.id || tgtId === selectedNode.id;
+                  })
+                  .map((e: any) => {
+                    const srcId = typeof e.source === "string" ? e.source : e.source.id;
+                    const tgtId = typeof e.target === "string" ? e.target : e.target.id;
+                    const linkedId = srcId === selectedNode.id ? tgtId : srcId;
+                    const linkedNode = graphData.nodes.find((n) => n.id === linkedId);
+                    if (!linkedNode || (linkedNode.type !== "self" && linkedNode.type !== "user")) return null;
+                    return (
+                      <div key={linkedId} className="glass p-3 flex items-center gap-3 cursor-pointer hover:border-violet-500/30 transition-colors"
+                        onClick={() => handleNodeClick(linkedNode)}>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                          linkedNode.type === "self" ? "bg-violet-500/20 text-violet-400" : "bg-cyan-500/20 text-cyan-400"
+                        }`}>
+                          {linkedNode.label[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">{linkedNode.label}</p>
+                          <p className="text-[10px] text-gray-500">{linkedNode.type === "self" ? "You" : "Friend"}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium">{m.username}</p>
-                        <p className="text-xs text-gray-500">Affinity: {(m.affinity * 100).toFixed(0)}%</p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
               </div>
+
+              {/* Events for this interest from Tier 2 */}
+              {enrichment?.tier2?.events?.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">🎫 Nearby Events</h3>
+                  <div className="space-y-2">
+                    {enrichment.tier2.events
+                      .filter((evt: any) => evt.title?.toLowerCase().includes(selectedNode.label.toLowerCase()) || true)
+                      .slice(0, 5)
+                      .map((evt: any, i: number) => (
+                        <a key={i} href={evt.url} target="_blank" rel="noopener noreferrer"
+                          className="glass p-3 block hover:border-cyan-500/30 transition-colors group">
+                          <p className="text-sm font-medium group-hover:text-cyan-400 transition-colors">{evt.title}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            {evt.date && <span className="text-[10px] text-amber-400">📅 {evt.date}</span>}
+                            {evt.location && <span className="text-[10px] text-gray-500">📍 {evt.location}</span>}
+                          </div>
+                          {evt.description && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{evt.description}</p>}
+                        </a>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Communities from Tier 2 */}
+              {enrichment?.tier2?.communities?.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">💬 Communities</h3>
+                  <div className="space-y-2">
+                    {enrichment.tier2.communities.slice(0, 4).map((comm: any, i: number) => (
+                      <a key={i} href={comm.url} target="_blank" rel="noopener noreferrer"
+                        className="glass p-3 block hover:border-violet-500/30 transition-colors group">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium group-hover:text-violet-400 transition-colors">{comm.name}</p>
+                          {comm.subscriber_count > 0 && (
+                            <span className="text-[10px] text-gray-500">{(comm.subscriber_count / 1000).toFixed(1)}k</span>
+                          )}
+                        </div>
+                        {comm.description && <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{comm.description}</p>}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Meetups from Tier 2 */}
+              {enrichment?.tier2?.meetups?.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">🤝 Meetups</h3>
+                  <div className="space-y-2">
+                    {enrichment.tier2.meetups.slice(0, 4).map((mt: any, i: number) => (
+                      <a key={i} href={mt.url} target="_blank" rel="noopener noreferrer"
+                        className="glass p-3 block hover:border-emerald-500/30 transition-colors group">
+                        <p className="text-sm font-medium group-hover:text-emerald-400 transition-colors">{mt.name}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          {mt.date && <span className="text-[10px] text-amber-400">📅 {mt.date}</span>}
+                          {mt.location && <span className="text-[10px] text-gray-500">📍 {mt.location}</span>}
+                          {mt.attendees > 0 && <span className="text-[10px] text-gray-500">👥 {mt.attendees}</span>}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

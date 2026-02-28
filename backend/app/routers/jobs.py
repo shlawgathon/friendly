@@ -1,4 +1,4 @@
-"""Job status route."""
+"""Job status routes."""
 from __future__ import annotations
 
 import json
@@ -38,3 +38,18 @@ async def get_job_status(job_id: str):
         error=job.get("error"),
         created_at=str(job.get("created_at", "")),
     )
+
+
+@router.get("/{job_id}/enrichment")
+async def get_enrichment_status(job_id: str):
+    """Poll enrichment status for Tier 2 and Tier 3."""
+    data = await graph.get_enrichment_results(job_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "job_id": job_id,
+        "status": data.get("status"),
+        "tier2": data.get("tier2"),
+        "tier3": data.get("tier3"),
+    }

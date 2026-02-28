@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     scraper_url: str = "http://localhost:8090"
     scraper_api_key: str = ""
 
+    # ── Enrichment Services ──
+    browsing_service_url: str = "http://localhost:8001"
+    n1_service_url: str = "http://localhost:8002"
+
     # ── Cooldowns ──
     ingest_cooldown_minutes: int = 5
 

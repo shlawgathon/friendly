@@ -58,3 +58,9 @@ export async function getIcebreaker(userId: string, targetUserId: string) {
   if (!res.ok) throw new Error("Icebreaker failed");
   return res.json();
 }
+
+export async function getEnrichmentStatus(jobId: string) {
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}/enrichment`);
+  if (!res.ok) throw new Error("Enrichment status failed");
+  return res.json();
+}
